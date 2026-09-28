@@ -38,6 +38,28 @@ class Metrics(unittest.TestCase):
         self.assertEqual(f["cognitive"], 1 + 2 + 3 + 1 + 1 + 1)
         self.assertEqual((f["start"], f["end"]), (1, 10))
 
+    def test_an_else_if_chain_is_flat_in_every_grammar(self):
+        # Go, Java and C# have no else node: the next `if` is its parent's alternative (devlake's
+        # GetStarRocksDataType, twelve else-ifs, read as nested 13 deep)
+        chain = {".go": "package p\nfunc f(x int) int {\n\tif x == 1 {\n\t\treturn 1\n\t} else if x == 2 {\n\t\treturn 2\n\t} else if x == 3 {\n\t\treturn 3\n\t}\n\treturn 0\n}\n",
+                 ".java": "class A { int f(int x) { if (x == 1) return 1; else if (x == 2) return 2; else if (x == 3) return 3; return 0; } }\n",
+                 ".cs": "class A { int f(int x) { if (x == 1) return 1; else if (x == 2) return 2; else if (x == 3) return 3; return 0; } }\n",
+                 ".js": "function f(x) { if (x == 1) return 1; else if (x == 2) return 2; else if (x == 3) return 3; return 0; }\n",
+                 ".rs": "fn f(x: i32) -> i32 { if x == 1 { 1 } else if x == 2 { 2 } else if x == 3 { 3 } else { 0 } }\n"}
+        for ext, src in chain.items():
+            with self.subTest(ext):
+                self.assertEqual(fn(parse(ext, src), "f")["nesting"], 1)
+
+    def test_an_if_alone_in_an_else_block_continues_the_chain(self):
+        alone = parse(".js", "function f(x) { if (a) { p() } else { // the rest\n if (b) { q() } } }\n")
+        self.assertEqual(fn(alone, "f")["nesting"], 1, "else { if } is else if in braces")
+        beside = parse(".js", "function f(x) { if (a) { p() } else { r(); if (b) { q() } } }\n")
+        self.assertEqual(fn(beside, "f")["nesting"], 2, "an if beside other statements in the else is nested")
+        go = parse(".go", "package p\nfunc f() {\n\tif a {\n\t\tp()\n\t} else {\n\t\tif b {\n\t\t\tq()\n\t\t}\n\t}\n}\n")
+        self.assertEqual(fn(go, "f")["nesting"], 1)
+        inner = parse(".go", "package p\nfunc f() {\n\tif a {\n\t\tif b {\n\t\t\tq()\n\t\t}\n\t}\n}\n")
+        self.assertEqual(fn(inner, "f")["nesting"], 2, "an if alone in the then branch is still nested")
+
     def test_bumps_are_separate_chunks_nested_two_deep(self):
         r = parse(".js", "function g(a) {\n"
                          "  if (a) { if (b) { x() } }\n"
@@ -397,6 +419,26 @@ class Unreferenced(unittest.TestCase):
         self.assertEqual(structure.unreferenced(files, edges, {"python": 0.9}, set()), ["pkg/m0.py"])
         self.assertEqual(structure.unreferenced(files, edges, {"python": 0.3}, set()), [], "a graph that resolves a third of the time is not judged")
         self.assertEqual(structure.unreferenced(files, edges, {"python": 0.9}, {"pkg/m0.py"}), [], "a declared entry point is no orphan")
+
+    @unittest.skipUnless(HAVE, "the tree-sitter grammars need Python 3.10 or newer")
+    def test_a_module_the_readme_shows_being_imported_is_referenced(self):
+        # devlake's backend/python/README.md shows `import pydevlake.domain_layer.crossdomain as cross`
+        import tempfile
+        with tempfile.TemporaryDirectory() as repo:
+            files = {"py/lib/lib/__init__.py": {"language": "python"}, "py/lib/lib/cross.py": {"language": "python"},
+                     "py/lib/lib/other.py": {"language": "python"}, "py/lib/lib/third.py": {"language": "python"}}
+            os.makedirs(os.path.join(repo, "py"))
+            with open(os.path.join(repo, "py", "README.md"), "w") as fh:
+                fh.write("Use it:\n\n```python\nimport lib.cross as cross\nfrom lib import third\nfrom . import other\n```\n\n"
+                         "```\nimport lib.other\n```\n\n~~~js\nimport x from './lib/other'\n~~~\n")
+            with open(os.path.join(repo, "notes.txt"), "w") as fh:
+                fh.write("```python\nimport lib.other\n```\n")
+            found = structure.documented(repo, {"py/README.md", "notes.txt", *files}, files)
+        self.assertEqual(found, {"py/lib/lib/cross.py", "py/lib/lib/third.py"},
+                         "a ```python block of a Markdown file only; a relative import in a README names nothing")
+        files = self.files(n=40)
+        edges = {p: info["imports"] for p, info in files.items()}
+        self.assertEqual(structure.unreferenced(files, edges, {"python": 0.9}, set(), {"pkg/m0.py"}), [])
 
     def test_a_language_where_more_than_one_file_in_twenty_looks_unreferenced_is_not_listed(self):
         files = self.files(n=20, orphans=3)   # 3 of 20 is over MAX_SHARE: the language loads code by name here

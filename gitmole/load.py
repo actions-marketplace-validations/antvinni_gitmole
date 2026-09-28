@@ -186,11 +186,13 @@ def parse_functions(text: str) -> list:
     """lizard --csv rows: nloc, ccn, tokens, params, length, location, file, function, long name, start, end;
     then, from gitmole's own step, a label for a nameless function (its start line) and why the span
     looks mis-parsed. A nameless function goes by its label, or "(anonymous)" in an older file, and
-    stays marked anonymous so the report can say where it is."""
-    rows = []
+    stays marked anonymous so the report can say where it is. A row lizard wrote twice (its Perl reader
+    emits a file's `*global*` more than once) is one function."""
+    rows, seen = [], set()
     for r in csv.reader(io.StringIO(text)):
-        if len(r) < 11:
+        if len(r) < 11 or tuple(r[:11]) in seen:
             continue
+        seen.add(tuple(r[:11]))
         name, label, suspect = r[7], r[11] if len(r) > 11 else "", r[12] if len(r) > 12 else ""
         anonymous = name in ("", "(anonymous)")
         rows.append({"file": _rel(r[6]), "function": textfmt.cut(label if anonymous and label else name, NAME_CAP) or "(anonymous)", "anonymous": anonymous,
@@ -358,6 +360,17 @@ def _read(out_dir: str, name: str) -> str:
         return fh.read()
 
 
+def parse_tree(out_dir: str, meta: dict):
+    """The paths at HEAD from tree.txt (git ls-tree -r -z --name-only), or None when the run has none to
+    judge by: an output directory from before the step, or a step that did not finish."""
+    path = os.path.join(out_dir, "tree.txt")
+    if not os.path.exists(path) or ((meta.get("steps") or {}).get("tree") or "run") != "run":
+        return None
+    with open(path, "rb") as fh:
+        paths = frozenset(p.decode("utf-8", "replace") for p in fh.read().split(b"\0") if p)
+    return paths or None
+
+
 def _read_json(out_dir: str, name: str, default):
     """`default` for a missing file or one a killed step left truncated or malformed."""
     return _json_or(_read(out_dir, name), default)
@@ -430,6 +443,7 @@ def load_report(out_dir: str, nested: bool = True) -> dict:
     return {
         "out_dir": out_dir,
         "meta": meta,
+        "tree": parse_tree(out_dir, meta),   # every path at HEAD, binaries too; None before 0.39
         # a run records its --file-types spec (None for the default list); a run from before that record
         # was measured unfiltered, so it is re-rendered unfiltered rather than with a guessed list
         "size": parse_scc(_read(out_dir, "size.json"), filetypes.parse(meta["file_types"]) if "file_types" in meta else None, scopes.of(meta)),

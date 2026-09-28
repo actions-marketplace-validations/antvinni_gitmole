@@ -264,14 +264,24 @@ def _tree(report: dict) -> dict:
     return (report.get("size") or {}).get("files") or {}
 
 
+def at_head(report: dict, path: str):
+    """Whether a path (a file, or a directory by its prefix) is in the tree at HEAD: from the run's
+    listing of HEAD when it has one, else from scc's file list, which leaves out every file it has no
+    language for (a binary, a .env); None when there is neither to judge by."""
+    tree = report.get("tree") or _tree(report)
+    if not tree:
+        return None
+    prefix = path.rstrip("/") + "/"
+    return path in tree or any(p.startswith(prefix) for p in tree)
+
+
 def sizer_concerns(report: dict) -> list:
-    tree = _tree(report)
     out = []
     for row in report.get("sizer") or []:
         sev = "warning" if row["concern"] >= 2 else "info"
         where = f" at {row['ref']}" if row.get("ref") else ""
         advice = _sizer_advice(row)
-        if row.get("ref") and tree and row["name"].startswith("Blobs: ") and row["ref"] not in tree:
+        if row.get("ref") and row["name"].startswith("Blobs: ") and at_head(report, row["ref"]) is False:
             where += ", no longer in the tree"   # deleting it did not shrink the clone
             advice = "It is already gone from the tree; a history rewrite is only worth it for clone size."
         out.append(_f(sev, "Repo health", f"{row['name']} is {row['value']}{where}. git-sizer level of concern {row['concern']}.", advice,
@@ -938,6 +948,9 @@ def hygiene_findings(report: dict) -> list:
     """The hygiene checks (hygiene.py), one finding per rule, each naming the OpenSSF Scorecard check it
     stands in for without the GitHub API. Nothing for an output directory from before the step."""
     h = report.get("hygiene") or {}
+    swept = [c["hash"] for c in (report.get("activity") or {}).get("sweeping") or [] if c.get("hash")]
+    if swept and (h.get("lockfiles") or {}).get("drift"):
+        h = {**h, "lockfiles": _drift_past_sweeps(h["lockfiles"], swept)}
     out = []
     for check in (_hygiene_actions, _hygiene_lockfiles, _hygiene_updates, _hygiene_presence, _hygiene_confusion, _hygiene_install, _hygiene_binaries, _hygiene_submodules, _hygiene_symlinks, _hygiene_trojan,
                   _hygiene_unused, _hygiene_licence, _hygiene_copyleft):
@@ -962,6 +975,31 @@ def _hygiene_actions(h: dict, out: list) -> None:
                       rule={"id": "unpinned_actions", "scorecard": "Pinned-Dependencies"}, evidence={"count": n, "pinned": a.get("pinned", 0), "unpinned": a["unpinned"][:10]}))
 
 
+def _drift_past_sweeps(lf: dict, swept: list) -> dict:
+    """The lock file drift without the manifest changes the report leaves out of every count as sweeping
+    (a module rename across the tree is not a dependency change): each drift dated by its newest change
+    that is not a sweep, and dropped when every change was one. A drift from before the changes were
+    recorded, or whose recorded changes ran out before a non-sweeping one, is kept as it is."""
+    kept = []
+    for d in lf["drift"]:
+        changes = d.get("changes")
+        rest = [c for c in changes or [] if not any(c["commit"].startswith(s) for s in swept)]
+        if changes is None or (not rest and d.get("more")):
+            kept.append(d)
+        elif rest:
+            kept.append({**d, "manifest_date": rest[0]["date"], "changes": rest})
+    dropped = len(lf["drift"]) - len(kept)
+    return {**lf, "drift": kept, "drift_count": lf.get("drift_count", len(lf["drift"])) - dropped}
+
+
+def _drift_row(d: dict) -> dict:
+    """One drift for the evidence, naming the change that dates it rather than listing them all."""
+    row = {k: v for k, v in d.items() if k not in ("changes", "more")}
+    if d.get("changes"):
+        row["commit"] = d["changes"][0]["commit"]
+    return row
+
+
 def _action_trust(uses: str, origin) -> int:
     """How far an action's owner sits from the repository, nearest last: another account's action (0)
     before one from the account the repository itself lives under on GitHub (1), before GitHub's own
@@ -980,7 +1018,8 @@ def _hygiene_lockfiles(h: dict, out: list) -> None:
         listed = "; ".join(f"{x['manifest']} changed on {x['manifest_date']}, after {x['lockfile']} last did on {x['lockfile_date']}" for x in d[:3])
         out.append(_f("warning", "Lock files behind their manifests", f"{_plural(lf.get('drift_count', len(d)), 'manifest')} changed after the lock file that pins it: {listed}.",
                       f"Regenerate {d[0]['lockfile']} and commit it with the manifest; a frozen install does not catch this.",
-                      rule={"id": "lockfile_drift", "by": "last commit time"}, evidence={"count": lf.get("drift_count", len(d)), "drift": d[:10]}))
+                      rule={"id": "lockfile_drift", "by": "last commit time"},
+                      evidence={"count": lf.get("drift_count", len(d)), "drift": [_drift_row(x) for x in d[:10]]}))
     if lf.get("missing"):
         m = lf["missing"]
         listed = "; ".join(f"{x['manifest']} has no {x['expected'][0]}" for x in m[:3])

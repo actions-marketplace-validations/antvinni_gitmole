@@ -95,14 +95,12 @@ def _places(f: dict) -> list:
 
 
 def _in_tree(report: dict, path: str) -> bool:
-    files = (report.get("size") or {}).get("files") or {}
-    if not files:
-        return True   # nothing to judge by: keep the result rather than drop it
-    # scc's files are the ones it counts as a language; a credential file (.env) is tracked, from git's own
-    # index, and scc never lists it, which dropped prometheus's credential_files warning from head scope
+    # a credential file (.env) is tracked, from git's own index; scc never lists it, so with no tree listing to
+    # read (an older output directory) it would drop prometheus's credential_files warning from head scope
     if path in ((report.get("meta") or {}).get("credential_files") or []):
         return True
-    return path in files or any(p.startswith(path.rstrip("/") + "/") for p in files)
+    from .findings import at_head
+    return at_head(report, path) is not False   # nothing to judge by: keep the result rather than drop it
 
 
 def _secret_results(report: dict, f: dict, scope: str) -> list:

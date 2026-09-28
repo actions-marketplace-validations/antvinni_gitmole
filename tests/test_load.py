@@ -180,6 +180,12 @@ class ParseFunctions(unittest.TestCase):
         rows = load.parse_functions('9,1,21,1,9,"tpl@1-9@tpl.js","tpl.js","tpl","tpl ( name )",1,9,"","opens a block at line 8 no deeper than its own start"\n')
         self.assertEqual(rows[0]["suspect"], "opens a block at line 8 no deeper than its own start")
 
+    def test_a_row_lizard_wrote_twice_is_one_function(self):
+        # curl's scripts/mk-ca-bundle.pl: lizard's Perl reader writes *global* twice, and the table showed both
+        row = '366,92,2778,0,677,"*global*@0-676@mk-ca-bundle.pl","mk-ca-bundle.pl","*global*","*global*",0,676,"",""\n'
+        other = '20,7,210,0,25,"parse@215-239@mk-ca-bundle.pl","mk-ca-bundle.pl","parse","parse",215,239,"",""\n'
+        self.assertEqual([r["function"] for r in load.parse_functions(row + other + row)], ["*global*", "parse"])
+
     def test_a_row_cut_short_by_a_killed_step_does_not_abort_the_report(self):
         rows = load.parse_functions(self.CSV + '5,3,40,1,5,"g@1-5@a.py","a.py","g","g( )",1,\n')
         self.assertEqual(len(rows), 3)
@@ -251,6 +257,20 @@ class ParseSecrets(unittest.TestCase):
 
     def test_empty_file_is_no_findings(self):
         self.assertEqual(load.parse_secrets(""), [])
+
+
+class ParseTree(unittest.TestCase):
+    def test_the_listing_of_head_and_when_there_is_none(self):
+        import os, tempfile
+        with tempfile.TemporaryDirectory() as out:
+            self.assertIsNone(load.parse_tree(out, {}), "an output directory from before the step")
+            with open(os.path.join(out, "tree.txt"), "wb") as fh:
+                fh.write(b"a.py\0bin/tool\0caf\xe9.py\0")
+            self.assertEqual(load.parse_tree(out, {}), frozenset({"a.py", "bin/tool", "caf\ufffd.py"}))
+            self.assertIsNone(load.parse_tree(out, {"steps": {"tree": "failed"}}), "a step that did not finish is no listing")
+            with open(os.path.join(out, "tree.txt"), "wb") as fh:
+                fh.write(b"")
+            self.assertIsNone(load.parse_tree(out, {}))
 
 
 class ParseFixHistory(unittest.TestCase):

@@ -37,7 +37,7 @@ except ImportError:  # run as a script: the package directory is sys.path[0]
     import filetypes
     import userdirs
 
-ANALYSER = "6"  # bump whenever what a file yields changes (a metric, an import's shape): the cache key carries it
+ANALYSER = "7"   # bump whenever what a file yields changes (a metric, an import's shape): the cache key carries it
 MAX_BYTES = 1_000_000
 FUNCTIONS_KEPT = 3000
 
@@ -70,6 +70,8 @@ NESTING = {"if_statement", "if_expression", "if", "unless", "for_statement", "fo
            "conditional_expression", "conditional", "try_statement"}
 # counted without nesting: the branch that continues one already counted
 FLAT = {"else_clause", "elif_clause", "elsif", "else"}
+IF = {"if_statement", "if_expression"}
+BLOCK = {"block", "statement_block", "compound_statement", "statement_list", "expression_statement"}   # a braced body (Rust wraps its if in a statement); Ruby's `then` is not an else
 NO_INCREMENT = {"try_statement"}   # the try nests its body; the catch is what Sonar counts
 LOGICAL = {"&&", "||", "and", "or"}
 DEBT = re.compile(r"\b(TODO|FIXME|XXX|HACK)\b")
@@ -417,7 +419,7 @@ def analyse(src: bytes, lang_name: str, language) -> dict:
                                                      "declaration_list", "namespace_declaration") for s in stack):
             definitions += 1   # a class at the top of the file; the root itself (Python's is called module) is not one
         if current is not None and t not in FUNCTION:
-            flat_if = t in ("if_statement", "if_expression") and parent_type in FLAT
+            flat_if = t in IF and _continues_else(node, parent_type)
             if t in FLAT or flat_if:
                 current.cognitive += 1
                 frame[4] = True
@@ -481,6 +483,23 @@ def analyse(src: bytes, lang_name: str, language) -> dict:
             if not cursor.goto_parent():
                 flush()
                 return _result(done, comments, comment_lines, definitions, debt, imports, deferred, main_guard, src, tree, shapes)
+
+
+def _continues_else(node, parent_type) -> bool:
+    """Whether an `if` is the next link of an else-if chain rather than an `if` nested in a branch: it
+    sits in an else node (JavaScript, C, Rust, PHP, Python's else), it is itself its parent `if`'s
+    alternative (Go, Java and C# write `else if` with no else node), or it is the whole of an else
+    block (`else { if ... }`, the same chain in braces)."""
+    if parent_type in FLAT:
+        return True
+    child, p = node, node.parent
+    while p is not None and p.type in BLOCK:   # else { if ... }: nothing but comments beside it in the block
+        if any(c != child and "comment" not in c.type for c in p.named_children):
+            return False
+        child, p = p, p.parent
+    if p is None:
+        return False
+    return p.type in FLAT or (p.type in IF and p.child_by_field_name("alternative") == child)
 
 
 def _in_chain(node) -> bool:
@@ -822,12 +841,49 @@ def entry_points(repo: str, tracked: set) -> set:
     return out
 
 
-def unreferenced(files: dict, edges: dict, resolved: dict, entries: set) -> list:
+# a fenced code block in Markdown and the info strings that say it is Python
+_FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})[ \t]*([\w+-]*)[^\n]*\n(.*?)^[ \t]{0,3}\1[ \t]*$", re.M | re.S)
+_DOC_PYTHON = {"python", "py", "python3"}
+
+
+def documented(repo: str, tracked, files: dict, vendored=()) -> set:
+    """The Python files the repository's own Markdown shows being imported: an absolute import inside a
+    ```python block of a tracked .md file, resolved the way the file's own imports are. A module the
+    README tells its users to import is the package's public surface, whatever inside the tree imports
+    it; these are references for the unreferenced list only, never edges of the import graph."""
+    g = grammar(".py")
+    if g is None:
+        return set()
+    docs = {}
+    for path in sorted(tracked):
+        if not path.lower().endswith(".md") or "node_modules/" in path or filetypes.is_vendored(path, vendored):
+            continue
+        try:
+            with open(os.path.join(repo, path), encoding="utf-8", errors="replace") as fh:
+                text = fh.read(500_000)
+        except OSError:
+            continue
+        found = []
+        for m in _FENCE.finditer(text):
+            if m.group(2).lower() in _DOC_PYTHON:
+                try:
+                    found += [e for e in analyse(m.group(3).encode(), "python", g[1])["imports"] if not e[1].startswith(".")]
+                except (ValueError, RecursionError):
+                    continue
+        if found:
+            docs[path] = {"language": "python", "imports": found}
+    if not docs:
+        return set()
+    edges, _, _ = _resolve({**{p: {"language": v.get("language")} for p, v in files.items()}, **docs})
+    return {t for d in docs for t in edges.get(d, [])}
+
+
+def unreferenced(files: dict, edges: dict, resolved: dict, entries: set, referenced=frozenset()) -> list:
     """Files in Python, JavaScript, TypeScript or Go that nothing in the tree imports and that are not an
     entry point by convention or by declaration: `possibly unreferenced`, never `dead`. A dynamic
     import, a plugin loaded by name or a framework's file routing does not show in an import graph, so
     only languages whose imports mostly resolve are judged."""
-    imported = {t for targets in edges.values() for t in targets}
+    imported = {t for targets in edges.values() for t in targets} | set(referenced)
     judged = trusted(files, resolved)
     counts = Counter(v.get("language") for v in files.values())   # the loud-language share below is over every file of the language
     names = Counter(p.rsplit("/", 1)[-1] for p in files)
@@ -952,7 +1008,7 @@ def collect(repo: str, procs: int = None, vendored=(), scope=()) -> dict:
     gomods = _blobs(repo, [p for p in tracked if p.rsplit("/", 1)[-1] == "go.mod" and not filetypes.is_vendored(p, vendored)])
     modules = go_modules({p: data.decode("utf-8", "replace") for p, (_, data) in gomods.items()})
     edges, eager, resolved = _resolve(files, modules)   # one pass: the second walk cost the step twice its resolution on a large clone
-    orphans = [p for p in unreferenced(files, edges, resolved, entry_points(repo, set(tracked))) if inside(p)]
+    orphans = [p for p in unreferenced(files, edges, resolved, entry_points(repo, set(tracked)), documented(repo, set(tracked), files, vendored)) if inside(p)]
     functions = []
     for path in sorted(p for p in files if inside(p)):
         for f in files[path].get("functions") or []:
