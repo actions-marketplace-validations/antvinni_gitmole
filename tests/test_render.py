@@ -467,9 +467,10 @@ class Report(unittest.TestCase):
         r["backtest"] = past
         r["fixes"] = [{"entity": "static/index.html", "n-fixes": 1, "last-fix": "2026-08-01", "recent-fixes": 1},
                       {"entity": "static/other.html", "n-fixes": 1, "last-fix": "2026-08-01", "recent-fixes": 1}]
-        text = rendered(r, [], width=200)
-        self.assertIn("6 months ago this list would have named 1 of the 2 files fixed since "
-                      "(a random 2 of the 2 files that had changed more than once would name 1.0; the 2 most changed would name 1)", text)
+        text = next(x for x in render.sections(r, full=False) if x["id"] == "watch")["caption"]
+        self.assertIn("6 months ago this list's top 2 would have named 1 of the 1 file fixed since among the 2 that had changed more than once: "
+                      "no more than the 2 most changed; not distinguishable from a random 2 (1.0 expected, p = 1)", text)
+        self.assertEqual(render.to_json(r, [])["watch_backtest"]["positives"], 1, "static/other.html was not in the pool")
         self.assertEqual(render.to_json(r, [])["watch_backtest"]["hits"], 1)
         self.assertEqual(render.to_json(r, [])["watch_backtest"]["pool"], 2)
         self.assertEqual(render.to_json(r, [])["watch_backtest"]["baselines"]["churn"], 1)
@@ -495,7 +496,26 @@ class Report(unittest.TestCase):
         r["meta"]["since"] = "2026-01-01"
         caption = next(x for x in render.sections(r, full=False) if x["id"] == "watch")["caption"]
         self.assertIn("ranked by revisions × lines of code alone; the reasons say what to look at there; commits since 2026-01-01", caption)
-        self.assertTrue(caption.endswith("the 2 most changed would name 1); whole history"), caption)
+        self.assertTrue(caption.endswith("(1.0 expected, p = 1); whole history"), caption)
+
+    def test_backtest_words_say_what_the_numbers_mean(self):
+        bt = {"t": "2026-03-10", "pool": 1245, "listed": 15, "fixed": 205, "positives": 128, "hits": 3, "expected": 1.5,
+              "baselines": {"churn": 5, "size": 2}, "p_by_chance": 0.19}
+        self.assertEqual(render.backtest_words(bt),
+                         "6 months ago this list's top 15 would have named 3 of the 128 files fixed since among the 1245 that had changed "
+                         "more than once: fewer than the 15 most changed (5); not distinguishable from a random 15 (1.5 expected, p = 0.19)",
+                         "devlake's, which once read 3 of the 205 beside a random 1.5 out of 128 and said nothing about either")
+        bt.update(hits=9, p_by_chance=0.00002)
+        self.assertTrue(render.backtest_words(bt).endswith("more than the 15 most changed (5); more than a random 15 would by chance (1.5 expected, p < 0.001)"))
+        bt.update(hits=5, p_by_chance=0.0496)
+        self.assertIn("no more than the 15 most changed; more than a random 15 would by chance (1.5 expected, p = 0.0496)", render.backtest_words(bt),
+                      "0.0496 is not rounded to a 0.05 that reads as the other side of the line")
+        bt.update(positives=0)
+        self.assertEqual(render.backtest_words(bt), "none of the 205 files fixed since the cut-off six months ago had changed more than once by then, "
+                                                    "so there is nothing to score the list against")
+        old = {k: v for k, v in bt.items() if k not in ("positives", "p_by_chance")}
+        self.assertIn("(a random 15 of the 1245 files that had changed more than once would name 1.5", render.backtest_words(old),
+                      "a backtest recorded before the pool's own count keeps its old sentence")
 
     def test_markdown_hotspots_hide_test_files_and_say_so(self):
         r = sample_report()
@@ -1134,6 +1154,15 @@ class Timeline(unittest.TestCase):
         text = rendered(r, [], width=120)
         self.assertIn("Timeline (Jul 2026 → Sep 2026)", text)
         self.assertNotIn("Oct", text)
+
+    def test_timeline_starts_no_earlier_than_the_history(self):
+        r = sample_report()
+        r["activity"]["timeline"] = {"Ann": {"2026-09": 4}, "Bob": {"2026-08": 1}}
+        text = rendered(r, [], width=120)
+        self.assertIn("Timeline (Aug 2026 → Sep 2026)", text, "ten days of history once drew Oct 2025 onwards, empty")
+        self.assertNotIn("Oct", text)
+        r["activity"]["timeline"] = {"Ann": {"2026-09": 4}}
+        self.assertIn("Timeline (Sep 2026)", rendered(r, [], width=120), "one month is not a range")
 
     def test_people_caption_says_what_is_windowed(self):
         r = sample_report()

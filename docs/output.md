@@ -105,7 +105,10 @@ in plain words, and what to do first. This page is the reference.
    - one author owning most surviving code;
    - git-sizer concerns; a large blob that is no longer in the tree says so,
      since deleting it did not shrink the clone;
-   - bug magnets: source files fixed again and again in recent months;
+   - bug magnets: source files fixed again and again in recent months; a file
+     whose recent fixes were all commits that also fixed a file listed above
+     it is counted with that file ("fixed in the same commits"), and a file
+     that first appeared inside the six months says it is new in the window;
    - reverts, naming the file most often backed out when any file was backed
      out twice, otherwise saying the reverts are spread;
    - brain methods: functions both complex and long, a warning when one
@@ -559,10 +562,15 @@ in plain words, and what to do first. This page is the reference.
    Under the watch list, one line says how the list would have done:
    gitmole reruns the change analysis as of six months before the last
    commit, with scc on the tree at that time, ranks the watch list from
-   that, and counts how many of the files fixed since were on it, next to
-   what a random list of the same size, drawn from the files that had
-   changed more than once, would score. Repositories with under a year
-   of history say `too little history to backtest`.
+   that, and counts how many of the files fixed since were on it, out of
+   the fixed files that had changed more than once by then (the pool the
+   list draws from). It then says in words whether that was fewer, no more
+   or more than the same number of most-changed files, and whether it was
+   more than a random list of the same size would name by chance: the
+   one-sided hypergeometric test (Fisher's exact test) at p < 0.05, from
+   the pool, its fixed files, the list's length and its hits, all in the
+   JSON's `watch_backtest`. Repositories with under a year of history say
+   `too little history to backtest`.
 
    That line is one cut-off on one repository. How the list does over six
    cut-offs on curl, django and react, next to lists ranked by churn alone,
@@ -611,8 +619,8 @@ in plain words, and what to do first. This page is the reference.
    weakest degree; the caption counts both and `--full` shows every pair.
    Hotspots hide files no longer in the tree the same way. Hotspots carry a `trend` column, sampled for the
    top hotspots: the change in complexity over the last year from scc on
-   the file at sampled commits (`--full` shows the whole series as a
-   sparkline), and under `--full` a `minors` column (contributors with a
+   the file at sampled commits, `-` when no sample is a year old (`--full`
+   shows the whole series as a sparkline), and under `--full` a `minors` column (contributors with a
    small share of the file's commits) and a `co-changes` column (the files
    it often changes with). The knowledge map marks owners who have stopped committing
    with `(gone)`, and under `--full` shows the share of each area's lines
