@@ -208,8 +208,8 @@ class FunctionMetrics(unittest.TestCase):
     def test_every_steps_outcome_is_recorded_not_only_the_optional_ones(self):
         _, meta, _ = self._main(True, [], step=("sh", "-c", "exit 3"), name="scc")
         self.assertEqual(meta["steps"], {"scc": "failed"})
-        _, meta, _ = self._main(True, [], name="git-sizer")
-        self.assertEqual(meta["steps"], {"git-sizer": "run"})
+        _, meta, _ = self._main(True, [], name="betterleaks")
+        self.assertEqual(meta["steps"], {"betterleaks": "run"})
 
 
 class Budget(unittest.TestCase):
@@ -772,49 +772,21 @@ class GoneWindow(unittest.TestCase):
 
 
 class Duplicates(unittest.TestCase):
-    def _main(self, extra, estimate, plan_calls):
+    def test_the_retired_flag_still_parses_and_nothing_is_planned_or_recorded_for_it(self):
+        """The duplicates step left at 0.39.0; --duplicates is kept so an older script's command line still parses."""
+        calls = []
         with tempfile.TemporaryDirectory() as d:
             _tiny_repo(d)
-            c = console()
             def planner(repo, out, branch="HEAD", **kw):
-                plan_calls.append(kw)
-                return [{"name": "duplicates", "argv": ["sh", "-c", "true"], "stdout": None, "deps": []}]
-            rc = cli.main([d, "--out", os.path.join(d, "out"), *extra], console=c, tool_check=lambda **kw: [], planner=planner,
-                          estimator=lambda repo, interval, **kw: estimate)
+                calls.append(kw)
+                return [{"name": "scc", "argv": ["sh", "-c", "true"], "stdout": None, "deps": []}]
+            rc = cli.main([d, "--out", os.path.join(d, "out"), "--duplicates"], console=console(), tool_check=lambda **kw: [], planner=planner,
+                          estimator=lambda repo, interval, **kw: {"files": 1, "samples": 1, "blames": 1, "seconds": 0.0})
             with open(os.path.join(d, "out", "meta.json")) as fh:
                 meta = json.load(fh)
-        return rc, c.export_text(), meta
-
-    SMALL = {"files": 100, "samples": 5, "blames": 500, "seconds": 0.4, "text_bytes": 34_000_000}
-    HUGE = {"files": 40000, "samples": 5, "blames": 500, "seconds": 0.4, "text_bytes": 171_000_000}
-
-    def test_on_by_default_and_recorded(self):
-        calls = []
-        _, text, meta = self._main([], self.SMALL, calls)
-        self.assertTrue(calls[0]["duplicates"])
-        self.assertEqual(meta["duplicates"], {"status": "run", "text_mb": 34.0, "budget_mb": run.DUPLICATES_BUDGET_MB})
-        self.assertNotIn("duplicates skipped", text)
-
-    def test_skipped_over_the_text_budget_unless_deep(self):
-        calls = []
-        _, text, meta = self._main([], self.HUGE, calls)
-        self.assertFalse(calls[0]["duplicates"])
-        self.assertEqual(meta["duplicates"]["status"], "skipped")
-        self.assertIn("duplicates skipped: 171 MB of tracked text is over the 80 MB budget", text)
-        self.assertIn("jscpd would need about 7 GB", text)
-        self.assertIn("--deep", text)
-        calls = []
-        _, text, meta = self._main(["--deep"], self.HUGE, calls)
-        self.assertTrue(calls[0]["duplicates"])
-        self.assertEqual(meta["duplicates"]["status"], "run")
-
-    def test_an_estimate_without_a_text_size_runs_it(self):
-        calls = []
-        self._main([], {"files": 1, "samples": 1, "blames": 1, "seconds": 0.0}, calls)
-        self.assertTrue(calls[0]["duplicates"])
-
-    def test_the_old_flag_still_parses(self):
-        self.assertTrue(cli.parse_args(["x", "--duplicates"]).duplicates, "an older CI line must not break")
+        self.assertEqual(rc, 0)
+        self.assertNotIn("duplicates", calls[0])
+        self.assertNotIn("duplicates", meta)
 
 
 class ReferenceDate(unittest.TestCase):
@@ -1417,15 +1389,15 @@ class InstallTools(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(calls, [run.REQUIRED_TOOLS])
         self.assertIn("scc: installed /x/tools/scc", text)
-        self.assertIn("5 tools installed", text)
+        self.assertIn(f"{len(run.REQUIRED_TOOLS)} tools installed", text)
         self.assertNotIn("target required", text)
 
     def test_install_tools_exits_1_naming_what_did_not_land(self):
         c = console()
-        rc = cli.main(["--install-tools"], console=c, installer=lambda names, say=print, **kw: [n for n in names if n != "git-sizer"])
+        rc = cli.main(["--install-tools"], console=c, installer=lambda names, say=print, **kw: [n for n in names if n != "betterleaks"])
         text = c.export_text()
         self.assertEqual(rc, 1)
-        self.assertIn("not installed: git-sizer", text)
+        self.assertIn("not installed: betterleaks", text)
         self.assertIn("docs/install.md", text)
 
     def test_install_tools_refuses_a_target_and_downloads_nothing(self):
@@ -1540,13 +1512,13 @@ class FirstRunOffer(unittest.TestCase):
     def test_a_download_that_leaves_a_tool_missing_still_exits_2_and_says_which(self):
         with tempfile.TemporaryDirectory() as d:
             _tiny_repo(d)
-            checks = iter([["scc", "jscpd"], ["jscpd"]])
+            checks = iter([["scc", "betterleaks"], ["betterleaks"]])
             c = self._terminal()
             rc = cli.main([d], console=c, tool_check=lambda **kw: next(checks), ask=lambda q: "yes",
                           installer=lambda names, say=print, **kw: ["scc"], isatty=lambda: True)
             text = c.export_text()
         self.assertEqual(rc, 2)
-        self.assertIn("still missing: jscpd", text)
+        self.assertIn("still missing: betterleaks", text)
         self.assertIn("gitmole --install-tools", text)
 
     def test_a_missing_plot_tool_alone_is_not_offered(self):

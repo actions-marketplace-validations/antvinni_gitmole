@@ -87,34 +87,6 @@ class ParseMaatCsv(unittest.TestCase):
         self.assertEqual(rows[0]["n-fixes"], 2)
 
 
-class ParseGitSizer(unittest.TestCase):
-    TEXT = """| Name                         | Value     | Level of concern               |
-| ---------------------------- | --------- | ------------------------------ |
-| * Blobs                      |           |                                |
-|   * Count                    |   951     |                                |
-|   * Maximum size         [4] |  21.3 MiB | **                             |
-| * Trees                      |           |                                |
-|   * Maximum entries      [3] |    24     |                                |
-| History structure            |           |                                |
-| * Maximum history depth      |   136 k   | *                              |
-| * Maximum tag depth          |     1     |                                |
-| Biggest checkouts            |           |                                |
-| * Number of files        [8] |  62.3 k   | *                              |
-| * Total size of files        |   747 MiB |                                |
-
-[3]  d2afdbc (e5d1b8f:static)
-[4]  b2ad626 (986027f:static/video/clip.mp4)
-"""
-
-    def test_returns_only_rows_with_concern_and_resolves_footnote(self):
-        rows = load.parse_git_sizer(self.TEXT)
-        self.assertEqual(rows, [
-            {"name": "Blobs: Maximum size", "value": "21.3 MiB", "concern": 2, "ref": "static/video/clip.mp4"},
-            {"name": "History structure: Maximum history depth", "value": "136 k", "concern": 1, "ref": ""},
-            {"name": "Biggest checkouts: Number of files", "value": "62.3 k", "concern": 1, "ref": ""},
-        ], "single-level sections (history structure, biggest checkouts) are rows too, not headers")
-
-
 class ParseTheseus(unittest.TestCase):
     def test_returns_latest_value_per_label(self):
         text = json.dumps({
@@ -191,41 +163,6 @@ class ParseFunctions(unittest.TestCase):
         self.assertEqual(len(rows), 3)
         g = next(r for r in rows if r["function"] == "g")
         self.assertEqual(g["end"], 0)
-
-
-class ParseDuplicates(unittest.TestCase):
-    TEXT = """header junk
-Duplicates
-===================================
-Duplicate block:
---------------------------
-gitmole/render.py:457 ~ 459
-gitmole/render.py:492 ~ 494
-^^^^^^^^^^^^^^^^^^^^^^^^^^
-Duplicate block:
---------------------------
-a/x.py:10 ~ 80
-b/y.py:5 ~ 75
-c/z.py:1 ~ 71
-^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Total duplicate rate: 0.78%
-Total unique rate: 99.65%
-"""
-
-    def test_blocks_with_span_and_rate(self):
-        d = load.parse_duplicates(self.TEXT)
-        self.assertEqual(d["rate"], 0.78)
-        self.assertEqual(len(d["blocks"]), 2)
-        self.assertEqual(d["blocks"][1], {"lines": 71, "places": [("a/x.py", 10, 80), ("b/y.py", 5, 75), ("c/z.py", 1, 71)]})
-        self.assertEqual(d["blocks"][0]["lines"], 3)
-
-    def test_empty(self):
-        self.assertEqual(load.parse_duplicates(""), {"rate": None, "blocks": []})
-
-    def test_places_come_out_in_path_order_whatever_lizard_printed(self):
-        text = "Duplicate block:\n---\nz.py:1 ~ 40\na.py:9 ~ 48\na.py:1 ~ 40\n^^^\nTotal duplicate rate: 5.00%\n"
-        self.assertEqual(load.parse_duplicates(text)["blocks"][0]["places"], [("a.py", 1, 40), ("a.py", 9, 48), ("z.py", 1, 40)])
 
 
 class ParseSecrets(unittest.TestCase):
@@ -350,11 +287,9 @@ class LoadReport(unittest.TestCase):
                 "maat-soc.csv": "entity,soc,partners\na.py,41,7\n",
                 "maat-tests.csv": "entity,n-sets,with-tests\na.py,3,1\n",
                 "maat-fixes.csv": "entity,n-fixes,last-fix,recent-fixes\na.py,2,2026-01-05,1\n",
-                "repo-health.txt": "",
                 "secrets.json": "[]",
                 "activity.json": json.dumps({"by_weekday": [1, 0, 0, 0, 0, 0, 0], "by_hour": [0] * 24, "by_month": {"2026-01": 1}, "authors": {}}),
                 "functions.csv": '3,2,20,1,3,"f@1-3@a.py","a.py","f","f( x )",1,3\n',
-                "duplicates.json": json.dumps({"tool": "jscpd", "files": 2, "clones": 1, "rate": 5.0, "blocks": [{"lines": 40, "places": [["b.py", 1, 40], ["a.py", 1, 40]]}]}),
                 "dependencies.json": json.dumps({"status": "scanned", "sources": [{"path": "uv.lock", "packages": 4}], "packages": 4, "vulnerable": [],
                                                  "database_date": "2026-09-17"}),
                 "theseus/cohorts.json": json.dumps({"labels": ["Code added in 2026"], "ts": ["t"], "y": [[10]]}),
@@ -377,26 +312,26 @@ class LoadReport(unittest.TestCase):
         self.assertEqual(r["tests"], [{"entity": "a.py", "n-sets": 3, "with-tests": 1}], "test co-change, as numbers")
         self.assertEqual(r["cohorts"], {"Code added in 2026": 10})
         self.assertEqual(r["theseus_authors"], {"Ann": 10})
-        self.assertEqual(r["sizer"], [])
+        self.assertNotIn("sizer", r, "git-sizer's step left at 0.39.0")
         self.assertEqual(r["secrets"], [])
         self.assertTrue(r["secrets_scanned"], "secrets.json was written, empty")
         self.assertEqual(r["activity"]["by_month"], {"2026-01": 1})
         self.assertEqual(r["functions"][0]["function"], "f")
-        self.assertEqual(r["duplicates"], {"rate": 5.0, "files": 2, "blocks": [{"lines": 40, "places": [("a.py", 1, 40), ("b.py", 1, 40)]}]})
         self.assertEqual(r["dependencies"], {"status": "scanned", "sources": [{"path": "uv.lock", "packages": 4}], "packages": 4, "vulnerable": [],
                                              "database_date": "2026-09-17"})
         self.assertEqual(r["signing"]["signed"], 1)
         self.assertEqual(r["out_dir"], out)
 
-    def test_an_older_output_directory_still_reads_lizards_duplicates_and_has_no_dependency_scan(self):
+    def test_an_older_output_directory_reads_without_its_retired_files_and_has_no_dependency_scan(self):
+        """duplicates.json and duplicates.txt were written before 0.39.0: a directory that still has them re-renders, and they are not read."""
         import os, tempfile
         with tempfile.TemporaryDirectory() as out:
             with open(os.path.join(out, "meta.json"), "w") as fh:
-                json.dump({"name": "d", "commits": 1, "identities": []}, fh)
+                json.dump({"name": "d", "commits": 1, "identities": [], "duplicates": {"status": "run"}}, fh)
             with open(os.path.join(out, "duplicates.txt"), "w") as fh:
                 fh.write("Duplicate block:\n---\na.py:1 ~ 40\nb.py:1 ~ 40\n^^^\nTotal duplicate rate: 5.00%\n")
             r = load.load_report(out)
-        self.assertEqual(r["duplicates"], {"rate": 5.0, "blocks": [{"lines": 40, "places": [("a.py", 1, 40), ("b.py", 1, 40)]}]})
+        self.assertNotIn("duplicates", r)
         self.assertEqual(r["dependencies"], {"status": "not-run"})
 
     def test_dependency_statuses_short_of_a_scan(self):
@@ -455,11 +390,6 @@ class LoadReport(unittest.TestCase):
             r = load.load_report(out)
         self.assertEqual(r["theseus_authors"], {"Bob": 90, "Ann": 10})
 
-    def test_the_duplication_rate_a_year_back_is_kept(self):
-        d = load.parse_duplicates_json({"rate": 6.1, "files": 10, "blocks": [], "then": {"date": "2025-09-17", "rev": "abc", "files": 9, "rate": 4.2}})
-        self.assertEqual(d["then"], {"date": "2025-09-17", "rev": "abc", "files": 9, "rate": 4.2})
-        self.assertNotIn("then", load.parse_duplicates_json({"rate": 6.1, "blocks": []}))
-
     def test_function_rows_come_back_in_file_and_line_order_whatever_the_step_wrote(self):
         text = ('3,2,20,1,3,"g@9-11@b.py","b.py","g","g( x )",9,11\n'
                 '3,2,20,1,3,"f@1-3@b.py","b.py","f","f( x )",1,3\n'
@@ -487,7 +417,6 @@ class LoadReport(unittest.TestCase):
         self.assertEqual(r["activity"], {})
         self.assertEqual(r["fixes"], [])
         self.assertEqual(r["functions"], [])
-        self.assertEqual(r["duplicates"], {"rate": None, "blocks": []})
         self.assertEqual(r["dependencies"], {"status": "not-run"})
         self.assertEqual(r["cohorts"], {})
         self.assertEqual(r["size"]["languages"], [])

@@ -116,48 +116,6 @@ def _num(v):
         return 0
 
 
-_SIZER_ROW = re.compile(r"^\|(?P<pad> *)(?P<name>.*?)\s*(?:\[(?P<ref>\d+)\])?\s*\|\s*(?P<value>.*?)\s*\|\s*(?P<concern>\**)\s*\|$")
-_SIZER_NOTE = re.compile(r"^\[(?P<ref>\d+)\]\s+\S+\s+\((?:[^:]+:)?(?P<path>[^)]*)\)")
-
-
-def parse_git_sizer(text: str) -> list:
-    notes = {}
-    for line in text.splitlines():
-        m = _SIZER_NOTE.match(line)
-        if m:
-            notes[m.group("ref")] = m.group("path")
-
-    # Two shapes of section: "Overall repository size" and "Biggest objects" have sub-headers
-    # ("* Blobs") with their metrics indented under them; "History structure" and "Biggest
-    # checkouts" list their metrics directly ("* Number of files"). A starred line with a value
-    # is a metric, a starred line without one is a sub-header, an unstarred line is a section.
-    rows, section, sub = [], "", ""
-    for line in text.splitlines():
-        m = _SIZER_ROW.match(line)
-        if not m:
-            continue
-        indent = len(m.group("pad")) - 1
-        raw = m.group("name").strip()
-        name = raw.lstrip("* ").strip()
-        if not name or name == "Name" or name.startswith("---"):
-            continue
-        if indent == 0 and not raw.startswith("*"):
-            section = sub = name
-            continue
-        if indent == 0 and not m.group("value"):
-            sub = name
-            continue
-        if not m.group("concern"):
-            continue
-        rows.append({
-            "name": f"{sub if indent else section}: {name}",
-            "value": m.group("value"),
-            "concern": len(m.group("concern")),
-            "ref": notes.get(m.group("ref") or "", ""),
-        })
-    return rows
-
-
 def parse_theseus(text: str) -> dict:
     d = _json_or(text, {})
     if not isinstance(d, dict) or not d.get("labels"):
@@ -199,43 +157,6 @@ def parse_functions(text: str) -> list:
                      "ccn": _num(r[1]), "nloc": _num(r[0]), "params": _num(r[3]), "start": _num(r[9]), "end": _num(r[10]), "suspect": suspect})
     rows.sort(key=lambda f: (f["file"], f["start"], f["end"], f["function"]))   # the function step works in parallel; the order is this one
     return rows
-
-
-_DUP_PLACE = re.compile(r"^(.+?):(\d+) ~ (\d+)$")
-_DUP_RATE = re.compile(r"Total duplicate rate:\s*([\d.]+)%")
-
-
-def parse_duplicates_json(data) -> dict | None:
-    """duplicates.json as the jscpd step writes it: the rate over the kept files and the blocks, largest
-    first, each place a (path, start, end) tuple. None when there is no such file."""
-    if not isinstance(data, dict):
-        return None
-    blocks = [{"lines": _num(b.get("lines")), "places": sorted(tuple(p[:3]) for p in b.get("places") or [] if len(p) >= 3)}
-              for b in data.get("blocks") or []]
-    rate = data.get("rate")
-    out = {"rate": float(rate) if rate is not None else None, "blocks": blocks, "files": _num(data.get("files"))}
-    if isinstance(data.get("then"), dict):
-        out["then"] = data["then"]   # the rate at the last commit a year before: the direction
-    return out
-
-
-def parse_duplicates(text: str) -> dict:
-    """lizard -Eduplicate output, which runs before 0.7 wrote: blocks of 'path:start ~ end' lines and the overall rate."""
-    blocks, current = [], None
-    for line in text.splitlines():
-        line = line.rstrip()
-        if line == "Duplicate block:":
-            current = []
-        elif current is not None:
-            m = _DUP_PLACE.match(line)
-            if m:
-                current.append((_rel(m.group(1)), int(m.group(2)), int(m.group(3))))
-            elif line.startswith("^^^"):
-                if current:
-                    blocks.append({"lines": current[0][2] - current[0][1] + 1, "places": sorted(current)})
-                current = None
-    m = _DUP_RATE.search(text)
-    return {"rate": float(m.group(1)) if m else None, "blocks": blocks}
 
 
 def parse_secrets(text: str) -> list:
@@ -462,7 +383,6 @@ def load_report(out_dir: str, nested: bool = True) -> dict:
         "ownership": ownership,
         "fixes": fixes,
         "fix_history": _fix_history(out_dir, fixes, meta, activity),   # which commits the recent fixes were, and when each file began
-        "sizer": parse_git_sizer(_read(out_dir, "repo-health.txt")),
         "cohorts": parse_theseus(cohorts) if cohorts else {},
         "theseus_authors": surviving,
         "secrets": parse_secrets(_read(out_dir, "secrets.json")),
@@ -471,7 +391,6 @@ def load_report(out_dir: str, nested: bool = True) -> dict:
         "secrets_scanned": isinstance(_read_json(out_dir, "secrets.json", None), list),
         "activity": activity,
         "functions": parse_functions(_read(out_dir, "functions.csv")),
-        "duplicates": parse_duplicates_json(_read_json(out_dir, "duplicates.json", None)) or parse_duplicates(_read(out_dir, "duplicates.txt")),
         # the osv-scanner step writes the file whatever it found (no lock files, no local database, a
         # scan); a missing file means the step did not finish or the run predates it
         "dependencies": parse_dependencies(_read_json(out_dir, "dependencies.json", None)),

@@ -19,9 +19,7 @@ from . import blame, filetypes, identity, scope as scopes, userdirs
 MAAT_SCRIPT = os.path.join(os.path.dirname(os.path.realpath(__file__)), "maat.py")
 BLAME_SCRIPT = os.path.join(os.path.dirname(os.path.realpath(__file__)), "blame.py")
 FUNCTIONS_SCRIPT = os.path.join(os.path.dirname(os.path.realpath(__file__)), "functions.py")
-DUPLICATES_SCRIPT = os.path.join(os.path.dirname(os.path.realpath(__file__)), "duplicates.py")
 LEAKS_SCRIPT = os.path.join(os.path.dirname(os.path.realpath(__file__)), "leaks.py")
-HEALTH_SCRIPT = os.path.join(os.path.dirname(os.path.realpath(__file__)), "health.py")
 DEPS_SCRIPT = os.path.join(os.path.dirname(os.path.realpath(__file__)), "deps.py")
 LAUNCH_SCRIPT = os.path.join(os.path.dirname(os.path.realpath(__file__)), "launch.py")
 
@@ -30,10 +28,7 @@ def module(name: str) -> list:
     """The argv that runs gitmole.NAME as a step: through launch.py, by path, so the analysed repository
     (the step's working directory) can never shadow gitmole with a package of the same name."""
     return [sys.executable, LAUNCH_SCRIPT, f"gitmole.{name}"]
-# jscpd holds every token of every file it scans: about a gigabyte of memory per 25 MB of tracked text
-# (a 34 MB tree took 0.9 GB, a 171 MB tree of generated SQL took 4 GB, both in seconds). Past this much
-# text the duplicates step is skipped unless --deep asks for it.
-DUPLICATES_BUDGET_MB = 80
+
 
 MONTH = 30 * 24 * 3600  # git-of-theseus sampling interval in seconds
 
@@ -52,7 +47,7 @@ def has_commits(repo: str) -> bool:
 
 
 def is_shallow(repo: str) -> bool:
-    """A shallow clone (git clone --depth): git-sizer refuses one, and its history stops at the graft."""
+    """A shallow clone (git clone --depth): its history stops at the graft."""
     out = subprocess.run(["git", "-C", repo, "rev-parse", "--is-shallow-repository"], capture_output=True, text=True).stdout.strip()
     return out == "true"
 
@@ -143,7 +138,7 @@ def env_path() -> str:
     """PATH with the directories --install-tools made for this gitmole's pins first, then pip's user bin dirs.
     First, so the pinned copy wins over a distribution's, as the formula's wrapper puts libexec/tools first;
     only the current pins' directories, so a copy an older gitmole installed is never picked up. Every tool
-    gitmole runs, in a step or in-process (backtest, duplicates), is looked up on this PATH."""
+    gitmole runs, in a step or in-process (backtest), is looked up on this PATH."""
     parts = userdirs.tool_dirs(REQUIRED_TOOLS)
     lib = os.path.expanduser("~/Library/Python")
     if os.path.isdir(lib):
@@ -151,7 +146,7 @@ def env_path() -> str:
     return os.pathsep.join(parts + [os.environ.get("PATH", "")])
 
 
-REQUIRED_TOOLS = ["scc", "git-sizer", "betterleaks", "jscpd", "osv-scanner"]
+REQUIRED_TOOLS = ["scc", "betterleaks", "osv-scanner"]
 PLOT_TOOLS = ["git-of-theseus-analyze"]
 
 
@@ -183,7 +178,7 @@ _VERSION_TOKEN = re.compile(r"\d+\.\d+[\w.-]*")
 @functools.lru_cache(maxsize=None)
 def tool_version(name: str, path: str = None) -> str | None:
     """The version a tool prints for --version: the last version-shaped token on its first line
-    ("scc version 4.1.0", "git-sizer release 1.5.0", "osv-scanner version: 2.6.0"). None when the tool is
+    ("scc version 4.1.0", "betterleaks version 1.8.1", "osv-scanner version: 2.6.0"). None when the tool is
     missing, hangs or prints none. Cached: a tool's version cannot change within a process, so a run with
     several steps (or a test calling manifest() often) pays for one --version per tool, not one per call."""
     return printed_version(name, dict(os.environ, PATH=path or env_path()))
@@ -228,13 +223,13 @@ def manifest(repo_dir: str, args, version_of=tool_version, lizard_of=lizard_vers
 # Everything a run writes besides meta.json and run.log. Removed before each run so a reused
 # --out directory never shows a previous run's data as this run's (a step skipped or killed
 # this time would otherwise leave last time's file in place).
-OUTPUTS = ["size.json", "tree.txt", "repo-health.txt", "secrets.json", "dependencies.json", "packages.json", "log.txt", "activity.json", "functions.csv", "signing.json", "hygiene.json", "unreachable.json", "structure.json", "provenance.json",
-           "duplicates.json", "duplicates.txt",   # duplicates.txt: what lizard's finder wrote before jscpd
+OUTPUTS = ["size.json", "tree.txt", "secrets.json", "dependencies.json", "packages.json", "log.txt", "activity.json", "functions.csv", "signing.json", "hygiene.json", "unreachable.json", "structure.json", "provenance.json",
+           "duplicates.json", "duplicates.txt", "repo-health.txt",   # what the retired duplicates and git-sizer steps wrote before 0.39.0: a reused directory holds only this run's
            "theseus/cohorts.json", "theseus/authors.json", "theseus/survival.json", "code-age.png", "survival.png", "trend.json"]
 OUTPUT_GLOBS = ["maat-*.csv"]
 # directories a run writes: the backtest sub-report, and the temporary checkouts the trend and
-# backtest steps make under the output directory, and jscpd's raw report (a SIGKILL leaves those behind).
-OUTPUT_DIR_GLOBS = ["backtest", ".backtest-tree-*", ".trend-*", ".jscpd-*"]
+# backtest steps make under the output directory (a SIGKILL leaves those behind).
+OUTPUT_DIR_GLOBS = ["backtest", ".backtest-tree-*", ".trend-*"]
 
 
 def clear_outputs(out_dir: str) -> None:
@@ -274,8 +269,8 @@ def ignore_revs_files(repo_dir: str) -> list:
 
 def plan(repo_dir: str, out_dir: str, branch: str = "HEAD", age: bool = True, plots: bool = False,
          procs: int = None, interval: int = MONTH, ignore=(), types: str = None, now: str = None, since: str = None,
-         lizard: bool = False, duplicates: bool = True, trend: bool = True, samples: int = 12, backtest: str = None,
-         ignore_revs=(), structure: bool = False, duplicates_then: str = None, scope=()) -> list:
+         lizard: bool = False, trend: bool = True, samples: int = 12, backtest: str = None,
+         ignore_revs=(), structure: bool = False, scope=()) -> list:
     """The steps of one run. `scope` (--path's directories) narrows the change log to their history and the
     per-file steps to their files; the steps whose meaning is the repository (scope.REPOSITORY_WIDE) keep
     the whole clone, and the size, structure and backtest steps are narrowed from meta.json's record."""
@@ -283,7 +278,7 @@ def plan(repo_dir: str, out_dir: str, branch: str = "HEAD", age: bool = True, pl
     log = o("log.txt")
     ignores = [x for pattern in ignore for x in ("--ignore", pattern)]
     theseus_ignores = ignores   # git-of-theseus has no --path; the command line refuses --plots with --path
-    ignores = ignores + [x for d in scope for x in ("--path", d)]   # blame, functions and duplicates take both
+    ignores = ignores + [x for d in scope for x in ("--path", d)]   # blame and functions take both
     type_args = ["--types", types] if types else []
     revs_args = [x for path in ignore_revs for x in ("--ignore-revs", path)]
     blame_argv = [sys.executable, BLAME_SCRIPT, repo_dir, out_dir, "--procs", str(procs or blame.default_procs()), *ignores, *type_args, "--aliases", o("meta.json"), "--log", log]
@@ -293,9 +288,6 @@ def plan(repo_dir: str, out_dir: str, branch: str = "HEAD", age: bool = True, pl
         {"name": "scc", "argv": ["scc", "--by-file", "--format", "json"], "stdout": o("size.json"), "deps": []},
         # every path at HEAD, NUL-separated: scc lists only the files it has a language for, and a binary is not one
         {"name": "tree", "argv": [*filetypes.GIT, "ls-tree", "-r", "-z", "--name-only", "HEAD"], "stdout": o("tree.txt"), "deps": []},
-        *([] if is_shallow(repo_dir) else   # git-sizer needs the whole object graph; the run records why it is missing
-          # over HEAD's history only, through health.py: what other references in this clone reach is the clone's, not the commit's
-          [{"name": "git-sizer", "argv": [sys.executable, HEALTH_SCRIPT], "stdout": o("repo-health.txt"), "deps": []}]),
         {"name": "betterleaks", "argv": [sys.executable, LEAKS_SCRIPT, o("secrets.json")], "stdout": None, "deps": []},   # hashes the values before anything is written
         {"name": "osv-scanner", "argv": [sys.executable, DEPS_SCRIPT, o("dependencies.json")], "stdout": None, "deps": []},   # offline, against the local database
         # -M: a move is not an edit; -w --ignore-blank-lines: a whitespace-only hunk is not a changed line, so a reformat that only
@@ -313,10 +305,6 @@ def plan(repo_dir: str, out_dir: str, branch: str = "HEAD", age: bool = True, pl
                       "stdout": None, "deps": []})
     if structure:   # tree-sitter: nesting, cognitive complexity, debt markers, the import graph; Python 3.10 or newer
         steps.append({"name": "structure", "argv": [*module("structure"), out_dir, "--procs", str(workers)], "stdout": None, "deps": []})
-    if duplicates:
-        steps.append({"name": "duplicates", "argv": [sys.executable, DUPLICATES_SCRIPT, repo_dir, out_dir, "--procs", str(workers), *ignores, *type_args,
-                                                    *(["--then", duplicates_then] if duplicates_then else [])],   # the rate a year back: a direction
-                      "stdout": None, "deps": []})
     if trend:
         steps.append({"name": "trend", "argv": [*module("trend"), out_dir, "--samples", str(samples)],
                       "stdout": None, "deps": ["scc", "change analysis"]})
@@ -493,8 +481,7 @@ def _git(repo_dir: str, *args) -> str:
 def estimate_blames(repo_dir: str, interval: int = MONTH, ignore=(), sample: int = 25, types=filetypes.DEFAULT,
                     budget: float = None, tracked: list = None, scope=()) -> dict:
     """Cost of the blame passes: a timed projection for the HEAD pass (seconds, a lower bound when `partial`)
-    and tracked files times sampled commits for git-of-theseus (blames); and the bytes of tracked text jscpd
-    would hold (text_bytes). `budget` lets the projection stop once it is over; `tracked` is blame.text_files()
+    and tracked files times sampled commits for git-of-theseus (blames). `budget` lets the projection stop once it is over; `tracked` is blame.text_files()
     already listed, so the index is not read again. `scope` is --path's directories: the files and the
     history under them."""
     files = len(_git(repo_dir, "ls-files", *scopes.pathspec(scope)).splitlines())
@@ -505,20 +492,8 @@ def estimate_blames(repo_dir: str, interval: int = MONTH, ignore=(), sample: int
     code = [f for f in text if filetypes.matches(f, types)]
     projection = blame.estimate(repo_dir, files=code, sample=sample, types=types, budget=budget)
     return {"files": files, "samples": samples, "blames": files * samples,
-            "seconds": projection["seconds"], "code_files": projection["files"], "text_bytes": text_bytes(repo_dir, files=text),
+            "seconds": projection["seconds"], "code_files": projection["files"],
             **({"partial": True} if projection.get("partial") else {})}
-
-
-def text_bytes(repo_dir: str, ignore=(), files: list = None) -> int:
-    """Size on disk of the tracked text files, after the ignore globs: what the duplicates step scans.
-    `files` is that list already made."""
-    total = 0
-    for f in (blame.text_files(repo_dir, ignore) if files is None else files):
-        try:
-            total += os.path.getsize(os.path.join(repo_dir, f))
-        except OSError:
-            pass
-    return total
 
 
 _TRAILER_ID = re.compile(r"^\s*(?P<name>[^<]*?)\s*(?:<(?P<email>[^>]*)>)?\s*$")

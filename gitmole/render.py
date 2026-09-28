@@ -269,8 +269,8 @@ def summary(report: dict) -> dict:
 
 
 # The steps every table leans on, by what the reader loses without them. The optional steps (code age,
-# functions, duplicates, trend, backtest) say so in their own sections; the structure step has none, so pulse names it.
-CORE_STEPS = {"scc": "size", "git-sizer": "repo health", "git-log": "change log", "change analysis": "change analysis",
+# functions, trend, backtest) say so in their own sections; the structure step has none, so pulse names it.
+CORE_STEPS = {"scc": "size", "git-log": "change log", "change analysis": "change analysis",
               "betterleaks": "secrets scan", "osv-scanner": "dependency scan"}
 
 
@@ -334,12 +334,6 @@ def pulse(report: dict) -> list:
     signed = signing_phrase(report)
     if signed:
         out.append(signed)
-    dup = report.get("duplicates") or {}
-    then = dup.get("then") or {}
-    if dup.get("rate") is not None and then.get("rate") is not None and max(dup["rate"], then["rate"]) >= 0.5:
-        now, before = dup["rate"], then["rate"]
-        way = "as a year before" if round(now, 1) == round(before, 1) else f"{'up' if now > before else 'down'} from {before:.1f}% a year before"
-        out.append(f"{now:.1f}% of lines duplicated, {way}")
     return out
 
 
@@ -887,13 +881,6 @@ def knowledge_section(report: dict, full: bool = True, width=None) -> dict:
     return _section("Knowledge map", columns, rows, note=None if rows else "no ownership data", caption="\n".join(notes) or None)
 
 
-def health_section(report: dict, full: bool = True, width=None) -> dict:
-    rows = [(r["name"], r["value"], "*" * r["concern"], r["ref"]) for r in report.get("sizer") or []]
-    note = None if rows else ("not measured: git-sizer needs a full clone, and this one is shallow" if (report.get("meta") or {}).get("shallow")
-                              else "nothing flagged")
-    return _section("Repo health (git-sizer concerns)", [("metric", {}), ("value", RIGHT), ("concern", {}), ("object", FOLD)], rows, note=note)
-
-
 def osps_section(report: dict, full: bool = True, width=None) -> dict:
     """The OSPS Baseline controls a clone can show, each with its result here: --full and Markdown only."""
     from . import findings, osps
@@ -949,7 +936,7 @@ def compare_section(result: dict) -> dict:
 
 
 BUILDERS = [watch_section, watch_by_component_section, size_section, people_section, knowledge_section, activity_section, timeline_section,
-            hotspots_section, coupling_section, signing_section, trailers_section, lines_section, age_section, functions_section, health_section, osps_section]
+            hotspots_section, coupling_section, signing_section, trailers_section, lines_section, age_section, functions_section, osps_section]
 # `--full` and Markdown only: Size, Activity and Code age are interesting once and rarely change what you
 # do next; Hotspots ranks the files the watch list already leads with, by the same product.
 FULL_ONLY = {"size", "activity", "age", "hotspots", "signing", "trailers", "lines", "watch_by_component", "osps"}
@@ -989,7 +976,8 @@ def secrets_line(report: dict) -> str:
 
 def secrets_pass(report: dict):
     """A check worth saying out loud when it passes: (title, detail) when the scan ran and found no
-    secret value, else None. Found values are findings already; a scan that did not run says nothing."""
+    secret value, else None. Found values are findings already, or, when every copy is in test, example, vendored,
+    generated or documentation files, counted in the footer's Secrets line; a scan that did not run says nothing."""
     rows = report.get("secrets") or []
     if not report.get("secrets_scanned") or leaks.group(rows):
         return None
@@ -1075,13 +1063,6 @@ def header(report: dict, findings: list = (), full: bool = False) -> Panel:
     return Panel(body, title=f"[bold]{s['name']}[/bold]", title_align="left", border_style="blue")
 
 
-def summary_line(findings: list) -> str:
-    """'7 more, true but seldom acted on: Knowledge loss, Repo health (3) and Reverts; --full lists them':
-    the findings of the rules the labels found never actionable, in one line of the default report."""
-    names = [g["title"] for g in textfmt.group_findings(findings)]   # a repeated title already reads "Repo health (3)"
-    return f"{len(findings)} more, true but seldom acted on: {textfmt.join_and(names)}; --full lists them"
-
-
 def unjudged_line(findings: list) -> str:
     """'4 more from the structure step, not labelled yet: Deep nesting and Debt in hotspots; --full lists them':
     the rules whose worth nobody has judged (findings.UNJUDGED), kept out of the default report's entries."""
@@ -1093,9 +1074,8 @@ def findings_panel(findings: list, report: dict = None, full: bool = True) -> Pa
     passed = checks_passed(report or {})
     if not findings and not passed:
         return Panel(Text("Nothing flagged.", style="green"), title="Findings", title_align="left", border_style="green")
-    brief = [] if full else [f for f in findings if f.get("summary") and not f.get("unjudged")]
     unjudged = [] if full else [f for f in findings if f.get("unjudged")]
-    shown = [f for f in findings if f not in brief and f not in unjudged]
+    shown = [f for f in findings if f not in unjudged]
     grid = Table.grid(padding=(0, 1))
     grid.add_column(no_wrap=True)
     grid.add_column(overflow="fold")
@@ -1107,8 +1087,6 @@ def findings_panel(findings: list, report: dict = None, full: bool = True) -> Pa
         for advice in g["advice"]:
             body.append(f"\n↳ {advice}", style="dim italic")
         grid.add_row(Text(SEVERITY_MARK[g["severity"]], style=style), body)
-    if brief:
-        grid.add_row(Text("·", style="dim"), Text(summary_line(brief), style="dim"))
     if unjudged:
         grid.add_row(Text("·", style="dim"), Text(unjudged_line(unjudged), style="dim"))
     if passed:   # last: problems first, then the checks that passed

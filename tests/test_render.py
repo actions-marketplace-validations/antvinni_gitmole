@@ -21,7 +21,6 @@ def sample_report():
         "authors": [{"entity": "static/apps-metadata.json", "n-authors": 4, "n-revs": 128}],
         "coupling": [{"entity": "static/tax.html", "coupled": "static/treasury.html", "degree": 85, "average-revs": 11}],
         "age": [{"entity": "static/index.html", "age-months": 0}],
-        "sizer": [{"name": "Blobs: Maximum size", "value": "21.3 MiB", "concern": 2, "ref": "static/video/clip.mp4"}],
         "cohorts": {"Code added in 2025": 8733, "Code added in 2026": 2728},
         "theseus_authors": {"Ann": 9076, "Bob": 2342},
         "secrets": [],
@@ -29,7 +28,6 @@ def sample_report():
         "fixes": [{"entity": "static/apps-metadata.json", "n-fixes": 9, "last-fix": "2026-09-01", "recent-fixes": 4}],
         "functions": [{"file": "static/js/app.js", "function": "render", "ccn": 27, "nloc": 180, "params": 4, "start": 10, "end": 200},
                       {"file": "static/js/util.js", "function": "tidy", "ccn": 12, "nloc": 30, "params": 1, "start": 1, "end": 31}],
-        "duplicates": {"rate": 1.5, "blocks": []},
         "dependencies": {"status": "scanned", "sources": [{"path": "package-lock.json", "packages": 120}, {"path": "uv.lock", "packages": 31}],
                          "packages": 151, "vulnerable": [], "database_date": "2026-09-16"},
         "ownership": [{"entity": "static/a.html", "author": "Ann", "added": 900, "deleted": 0},
@@ -134,13 +132,13 @@ class Report(unittest.TestCase):
         self.assertNotIn("Dependencies:", text, "an output directory from before the step says nothing")
         self.assertIn("Secrets: none found", text)
 
-    def test_tables_show_people_hotspots_coupling_age_and_health(self):
+    def test_tables_show_people_hotspots_coupling_and_age(self):
         text = rendered(sample_report(), [], full=True)
         self.assertIn("Ann", text)
         self.assertIn("static/apps-metadata.json", text)
         self.assertIn("static/treasury.html", text)
         self.assertIn("2025", text)
-        self.assertIn("21.3 MiB", text)
+        self.assertNotIn("Repo health", text, "git-sizer's table left at 0.39.0")
 
     def test_header_mentions_the_window_when_bounded(self):
         r = sample_report()
@@ -258,13 +256,10 @@ class Report(unittest.TestCase):
         self.assertEqual(short, " · ".join(many[:6]) + " · 3 more")
         self.assertEqual(full, " · ".join(many))
 
-    def test_the_duplication_direction_is_a_header_phrase(self):
+    def test_the_duplication_rate_is_no_longer_a_header_phrase(self):
+        """The duplicates step left at 0.39.0; an old report dict that still carries its rate says nothing of it."""
         r = sample_report()
         r["duplicates"] = {"rate": 6.1, "blocks": [], "then": {"date": "2025-09-10", "rate": 4.2, "files": 30}}
-        self.assertIn("6.1% of lines duplicated, up from 4.2% a year before", render.pulse(r))
-        r["duplicates"]["then"]["rate"] = 6.1
-        self.assertIn("6.1% of lines duplicated, as a year before", render.pulse(r))
-        del r["duplicates"]["then"]
         self.assertFalse([x for x in render.pulse(r) if "duplicated" in x])
 
     def test_provenance_is_a_full_only_section_of_trailers_with_the_cohort_and_shape_below(self):
@@ -1077,11 +1072,13 @@ class FullOnlySections(unittest.TestCase):
 
     def test_header_line_names_the_core_steps_that_did_not_finish(self):
         r = sample_report()
-        r["meta"]["steps"] = {"scc": "timeout", "git-sizer": "failed", "change analysis": "skipped", "betterleaks": "run", "trend": "failed"}
+        r["meta"]["steps"] = {"scc": "timeout", "osv-scanner": "failed", "change analysis": "skipped", "betterleaks": "run", "trend": "failed",
+                              "git-sizer": "failed"}   # a retired step an old meta.json still names is not a core one
         text = rendered(r, [], width=160)
-        self.assertIn("size timed out  ·  repo health failed  ·  change analysis skipped", text)
+        self.assertIn("size timed out  ·  change analysis skipped  ·  dependency scan failed", text)
         self.assertNotIn("trend failed", text, "the optional steps say so in their own sections")
-        self.assertIn("size timed out · repo health failed", render.markdown(r, []))
+        self.assertNotIn("repo health", text)
+        self.assertIn("size timed out · change analysis skipped", render.markdown(r, []))
         r["meta"]["steps"] = {"scc": "run"}
         self.assertNotIn("size", render.pulse(r)[0])
 
@@ -1450,8 +1447,7 @@ class Sections(unittest.TestCase):
         self.assertEqual(titles[:6], ["Watch list", "Watch list by component", "Size by language", "People", "Knowledge map", "Activity"])
         self.assertTrue(titles[6].startswith("Timeline"))
         self.assertTrue(titles[7].startswith("Hotspots"))
-        self.assertEqual(titles[-3], "Complex functions")
-        self.assertEqual(titles[-2], "Repo health (git-sizer concerns)")
+        self.assertEqual(titles[-2], "Complex functions")
         self.assertEqual(titles[-1], "OSPS Baseline")
         self.assertEqual([x["id"] for x in secs][:5], ["watch", "watch_by_component", "size", "people", "knowledge"])
         size = secs[2]
@@ -1699,26 +1695,20 @@ class PeopleMerges(unittest.TestCase):
 
 class SummaryLine(unittest.TestCase):
     def _findings(self):
-        mk = lambda rid, sev, title, summary=False: {"severity": sev, "title": title, "detail": f"{title} detail", "advice": "act", "rule": {"id": rid},
-                                                     **({"summary": True} if summary else {})}   # noqa: E731
-        return [mk("secrets_in_source", "critical", "1 secret(s) in history"), mk("knowledge_loss", "warning", "Knowledge loss", True),
-                mk("repo_health", "info", "Repo health", True), mk("repo_health", "info", "Repo health", True), mk("bug_magnets", "warning", "Bug magnets")]
+        mk = lambda rid, sev, title: {"severity": sev, "title": title, "detail": f"{title} detail", "advice": "act", "rule": {"id": rid}}   # noqa: E731
+        return [mk("secrets_in_source", "critical", "1 secret(s) in history"), mk("bug_magnets", "warning", "Bug magnets")]
 
     def _text(self, panel):
         out = io.StringIO()
         Console(file=out, width=200, color_system=None).print(panel)
         return out.getvalue()
 
-    def test_the_default_report_names_summarised_findings_in_one_line(self):
+    def test_the_default_report_has_no_seldom_acted_on_line(self):
+        """The rules it named were retired at 0.39.0 (findings.SUMMARISED is empty)."""
         text = self._text(render.findings_panel(self._findings(), {}, full=False))
         self.assertIn("Bug magnets detail", text)
-        self.assertNotIn("Knowledge loss detail", text)
-        self.assertIn("3 more, true but seldom acted on: Knowledge loss and Repo health (2); --full lists them", text)
-
-    def test_full_spells_out_every_finding(self):
-        text = self._text(render.findings_panel(self._findings(), {}, full=True))
-        self.assertIn("Knowledge loss detail", text)
         self.assertNotIn("seldom acted on", text)
+        self.assertFalse(hasattr(render, "summary_line"))
 
     def test_the_structure_step_s_unlabelled_findings_get_a_line_of_their_own(self):
         unjudged = [{"severity": "warning", "title": "Deep nesting", "detail": "deep", "advice": "act",
@@ -1726,7 +1716,6 @@ class SummaryLine(unittest.TestCase):
                     {"severity": "info", "title": "Debt in hotspots", "detail": "debt", "advice": "act",
                      "rule": {"id": "debt_in_hotspots"}, "summary": True, "unjudged": True}]
         text = self._text(render.findings_panel(self._findings() + unjudged, {}, full=False))
-        self.assertIn("3 more, true but seldom acted on: Knowledge loss and Repo health (2); --full lists them", text)
         self.assertIn("2 more from the structure step, not labelled yet: Deep nesting and Debt in hotspots; --full lists them", text)
         self.assertNotIn("deep", text.replace("Deep nesting", ""))
         full = self._text(render.findings_panel(self._findings() + unjudged, {}, full=True))
