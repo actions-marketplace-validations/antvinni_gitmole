@@ -716,6 +716,14 @@ class BrainMethods(unittest.TestCase):
         self.assertEqual(f[0]["advice"], "Split onSendEnd in lib/reply.js first, before the next change lands there.")
         self.assertNotIn("validate10", f[0]["detail"])
 
+    def test_a_numbered_schema_migration_is_not_a_brain_method(self):
+        fns = [{"file": "backend/core/models/migrationscripts/20240116_modify_fileds_sort.go", "function": "Up", "ccn": 37, "nloc": 146, "params": 1, "start": 1, "end": 146},
+               {"file": "backend/core/runner/run_task.go", "function": "RunPluginSubTasks", "ccn": 33, "nloc": 145, "params": 6, "start": 1, "end": 145}]
+        f = findings.brain_methods(report(functions=fns))
+        self.assertEqual(f[0]["advice"], "Split RunPluginSubTasks in backend/core/runner/run_task.go first, before the next change lands there.")
+        self.assertNotIn("20240116", f[0]["detail"], "a migration is replayed as written; nobody should split it")
+        self.assertEqual(findings.brain_methods(report(functions=fns[:1])), [])
+
     def test_example_code_is_not_a_brain_method(self):
         fns = [{"file": "examples/named-pipe-ready.rs", "function": "windows_main", "ccn": 25, "nloc": 109, "params": 0, "start": 1, "end": 109},
                {"file": "tokio/src/sync/notify.rs", "function": "poll_notified", "ccn": 17, "nloc": 140, "params": 2, "start": 1, "end": 140}]
@@ -1216,6 +1224,17 @@ class Hygiene(unittest.TestCase):
         self.assertIn("2 of 3 workflow steps use an action by tag or branch: actions/checkout@v4 and org/deploy@main in .github/workflows/ci.yml.", f["detail"])
         self.assertTrue(f["advice"].startswith("Pin org/deploy@main to a full commit SHA first"), f["advice"])
         self.assertEqual(f["rule"]["scorecard"], "Pinned-Dependencies")
+
+    def test_the_pin_advice_names_another_owners_action_before_the_repositorys_own(self):
+        unpinned = [{"file": ".github/workflows/a.yml", "uses": "actions/checkout@v7"}, {"file": ".github/workflows/a.yml", "uses": "apache/skywalking-eyes@main"},
+                    {"file": ".github/workflows/b.yml", "uses": "golangci/golangci-lint-action@v9"}]
+        def advice(origin):
+            return self.by_id(self.h(actions={"unpinned": unpinned, "unpinned_count": 3, "pinned": 0, "origin": origin}))["unpinned_actions"]["advice"]
+        self.assertTrue(advice({"host": "github.com", "owner": "Apache"}).startswith("Pin golangci/golangci-lint-action@v9 "), "apache's own action is nearer than golangci's")
+        self.assertTrue(advice(None).startswith("Pin apache/skywalking-eyes@main "), "no origin: the order as before")
+        self.assertTrue(advice({"host": "gitlab.com", "owner": "apache"}).startswith("Pin apache/skywalking-eyes@main "), "an account on another host is not the GitHub one")
+        f = self.by_id(self.h(actions={"unpinned": unpinned[:2], "unpinned_count": 2, "pinned": 0, "origin": {"host": "github.com", "owner": "apache"}}))["unpinned_actions"]
+        self.assertTrue(f["advice"].startswith("Pin apache/skywalking-eyes@main "), "the repository's own owner still comes before GitHub's")
 
     def test_lockfile_drift_and_missing_lockfiles(self):
         found = self.by_id(self.h(lockfiles={"drift": [{"manifest": "package.json", "lockfile": "package-lock.json", "manifest_date": "2026-03-01", "lockfile_date": "2026-01-01"}],

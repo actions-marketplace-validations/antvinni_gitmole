@@ -314,11 +314,7 @@ def pulse(report: dict) -> list:
     """One phrase each for the descriptive tables the default report leaves out."""
     out = _unfinished(report)   # first: every number below may be missing because of it
     act = report.get("activity") or {}
-    days, hours = act.get("by_weekday") or [], act.get("by_hour") or []
-    if days and max(days):
-        day = WEEKDAYS[max(range(7), key=lambda i: days[i])]
-        when = f" at {max(range(24), key=lambda i: hours[i]):02d}:00" if hours and max(hours) else ""
-        out.append(f"most commits on {day}{when}")
+    days = act.get("by_weekday") or []   # the busiest weekday and hour are the Activity table's (--full), not a header phrase
     total = sum(days)
     if act.get("fix_commits") is not None and total:
         out.append(f"{_pct(act['fix_commits'], total)} of commits are fixes")
@@ -349,16 +345,26 @@ def pulse(report: dict) -> list:
 
 def signing_phrase(report: dict):
     """'33% of commits signed (ssh 28%, gpg 6%), 50% of the last year's', or 'no commits signed'; None
-    without the step. Read from the commit objects, nothing verified: evidence, not a level."""
+    without the step. Read from the commit objects, nothing verified: evidence, not a level. When the
+    forge committed and signed some of them itself (a merge from the web), those are named apart: its
+    signature says nothing about who wrote the change."""
     sig = report.get("signing") or {}
     if not sig.get("commits"):
         return None
     if not sig.get("signed"):
         return "no commits signed"
-    mix = ", ".join(f"{k} {_pct(v, sig['commits'])}" for k, v in sorted((sig.get("mechanisms") or {}).items(), key=lambda kv: (-kv[1], kv[0])))
+    forge = sig.get("forge") or {}
+    by_forge, forge_mix = forge.get("signed") or 0, forge.get("mechanisms") or {}
     last = sig.get("last_year") or {}
-    tail = f", {_pct(last['signed'], last['commits'])} of the last year's" if last.get("commits") else ""
-    return f"{_pct(sig['signed'], sig['commits'])} of commits signed ({mix}){tail}"
+    own = sig["signed"] - by_forge
+    mechanisms = {k: v - forge_mix.get(k, 0) for k, v in (sig.get("mechanisms") or {}).items()} if by_forge else (sig.get("mechanisms") or {})
+    mix = ", ".join(f"{k} {_pct(v, sig['commits'])}" for k, v in sorted(mechanisms.items(), key=lambda kv: (-kv[1], kv[0])) if v > 0)
+    tail = f", {_pct(last['signed'] - (last.get('forge_signed') or 0) if by_forge else last['signed'], last['commits'])} of the last year's" if last.get("commits") else ""
+    if not by_forge:
+        return f"{_pct(sig['signed'], sig['commits'])} of commits signed ({mix}){tail}"
+    head = f"{_pct(own, sig['commits'])} of commits signed by their authors ({mix}){tail}" if own else "no commits signed by their authors"
+    share = _pct(by_forge, sig['commits'])
+    return head if share == "0%" else f"{head}; {share} signed by the forge on merge"
 
 
 def _age_status(report: dict) -> str:
@@ -597,6 +603,9 @@ def signing_section(report: dict, full: bool = True, width=None) -> dict:
     people = [i for i in (sig.get("by_identity") or [])[:5]]
     if people:
         parts.append(", ".join(f"{i['name']} {_pct(i['signed'], i['commits'])}" for i in people))
+    forge = sig.get("forge") or {}
+    if forge.get("signed"):
+        parts.append(f"{forge['signed']:,} of the signed commits were committed and signed by the forge on merge, not by their authors")
     parts.append("read from the commit objects, nothing verified")
     return _section("Signing by year", columns, rows, caption="; ".join(parts))
 
