@@ -82,9 +82,10 @@ Exit codes for CI and for coding agents.
 
 | Option | What it does |
 |---|---|
-| `--fail-on LEVEL` | Exit 3 if any finding is at LEVEL or worse, LEVEL being `critical`, `warning` or `info`. |
+| `--fail-on LEVEL` | Exit 3 if any finding is at LEVEL or worse, LEVEL being `critical`, `warning` or `info`; exit 4 when none is and a step the findings read did not complete. See [Exit codes](#exit-codes). |
+| `--baseline BEFORE.json` | With an earlier `--json` export of the same clone: the findings it already had are still reported, their statement opening "In the baseline:", and do not count toward `--fail-on`. See [Baseline](#baseline). Not with `owner/*`. |
 | `--risk BASE` | Score the files changed since BASE (the merge base with HEAD) with the watch list's score (each file's share, in percent, of the repository's revisions × lines of code), in one extra section with a total. Needs a local path; works with `--no-run`, and the JSON carries the total. |
-| `--risk-threshold N` | With `--risk`: exit 3 when the changed files together hold more than N percent. With `--hook`: exit 2 at the same point. |
+| `--risk-threshold N` | With `--risk`: exit 3 when the changed files together hold more than N percent; exit 4 when they do not and scc, the log or the change analysis did not complete. With `--hook`: exit 2 at the same point. |
 | `--hook` | With `--no-run` and an output directory: read an agent hook's JSON on stdin (or take files after `--`), score the files it names like `--risk`, print a summary the agent reads back, and exit 2 when `--risk-threshold` is exceeded. See [Agent hooks](#agent-hooks). |
 
 ### Tools and housekeeping
@@ -157,6 +158,59 @@ A CI job that runs
 on secrets in source files and still posts the report. Secrets found only in
 test files are a warning, so gate on `warning` to block on those too. Both
 exports also work with `--no-run` against an earlier output directory.
+### Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Done, and no gate asked for found anything. Without `--fail-on`, `--risk-threshold` or `--hook` a run exits 0 even when a step did not complete; the run names the step and the report's header says what is missing. |
+| 1 | `--doctor` found a tool off its pin; `--install-tools` or `--clean` could not do all it was asked. |
+| 2 | Bad arguments or an unreadable output directory; with `--hook`, over `--risk-threshold`. |
+| 3 | A gate found what it stops on: a finding at the `--fail-on` level or worse that is not in the `--baseline`, or a change over `--risk-threshold`. |
+| 4 | A gate could not check: a step it reads failed, timed out or was skipped, and it found nothing it stops on in what the other steps left. The message names the step; `run.log` in the output directory says why. `--fail-on` reads every step but the two plots and the backtest; `--risk-threshold` and `--hook` read scc, the log and the change analysis. |
+| 130 | Interrupted. |
+
+A secrets scan that timed out leaves no secrets table, so before 4 existed
+`--fail-on critical` passed a repository whose scan never finished. The
+same holds for a re-render: `--no-run` on an output directory with a failed
+step exits 4 under a gate. An output directory from before steps were
+recorded (before 0.8.0) cannot say, and is judged on what it holds. Under
+`owner/*` the code is 3 if any repository tripped the gate, else 4 if any
+had an unfinished step. `--sarif` records the same thing on its run:
+`invocations[0].executionSuccessful` is false and
+`toolExecutionNotifications` names each unfinished step.
+
+### Baseline
+
+The secrets step reads the whole history, because a key rotated or a file
+deleted is still in every clone. So a repository with a secret committed in
+2021 and deleted in 2022 has a critical finding on every run, and
+`--fail-on critical` would block it forever. `--baseline` takes an earlier
+`--json` export of the same clone and gates on what is new since:
+
+```yaml
+# first run, once, after the findings in it have been looked at: keep the export
+- run: gitmole . --json gitmole-baseline.json
+# every later run: report everything, fail only on what the baseline did not have
+- run: gitmole . --fail-on critical --baseline gitmole-baseline.json --sarif gitmole.sarif
+```
+
+Commit the baseline, or keep it as a CI artifact, and write it again when
+the findings in it have been dealt with. A finding counts as in the
+baseline when the export has one with the same rule id (and, for the rules
+that report several, the same metric or email) at the same severity or
+worse; a finding that was a warning and is now critical is new. Secrets and
+vulnerable dependencies are compared by their rows, because one finding
+holds every value or package: a secret's place by betterleaks'
+fingerprint (`commit:file:rule:line`, the same one `.betterleaksignore`
+takes), a package by name, version, lock file and advisory ids. The rows the
+baseline did not have go through the same rule on their own, and what that
+finds is what counts, so a new secret fails the gate while the old ones
+stay reported. A known value committed again is a new place, and counts.
+Findings in the baseline carry `"baseline": "in the baseline"` in the JSON
+(`"new"` otherwise) and `baselineState` `unchanged` or `new` in the SARIF;
+stderr names the ones that did not count. `--baseline` does not change the
+exit code for a step that did not complete: 4 stays 4.
+
 `--risk-threshold` needs `--risk`; it exits 3 when the files changed since
 main hold more than 10% of the repository's revisions × lines of code, and
 the total prints in the Change risk caption.
@@ -217,7 +271,13 @@ naming the commit; its line belongs to that commit's version of the file,
 so under the default `--sarif-scope head` it carries no region, and a
 secret in a file no longer in the tree, a sweeping commit and anything else
 without a HEAD location are left out. `--sarif-scope history` keeps them,
-with the commit under `properties.commit`.
+with the commit under `properties.commit`. A finding whose every place the
+head scope leaves out still gets one result, with no location and
+`properties.inTree` false, so the document holds every finding `--fail-on`
+stops on: a critical made only of secrets in files deleted years ago exits
+3 and is an `error` result. SARIF allows a result without a location;
+GitHub code scanning accepts it and does not display it, GitLab drops it,
+and `--sarif-scope history` gives it its places.
 
 ```yaml
 - run: gitmole . --out analysis --sarif gitmole.sarif
@@ -333,7 +393,10 @@ hook's JSON on stdin, takes the file paths the agents put there
 scores them like `--risk`, prints one line per file with what imports it and
 the companions the edit left untouched, and exits 2 when the total is over `--risk-threshold`,
 which every one of these hooks reads as "block"; without a threshold it is
-a soft warning. The output directory comes from an earlier run
+a soft warning. When the output directory's scc, log or change analysis did
+not complete, every file scores 0, so with a threshold the hook exits 4 and
+says so instead of passing the edit: Claude Code shows that to you without
+blocking the model, Cursor with `failClosed` and pre-commit block on it. The output directory comes from an earlier run
 (`gitmole . --out analysis-repo`), so the hook itself costs a few hundred
 milliseconds and needs no tool on PATH.
 

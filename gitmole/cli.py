@@ -91,7 +91,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     gates = p.add_argument_group("gates")
     gates.add_argument("--fail-on", choices=findings.SEVERITIES, metavar="LEVEL",
-                       help="exit 3 at LEVEL or worse: " + ", ".join(findings.SEVERITIES))
+                       help="exit 3 at LEVEL or worse; 4 if a step failed")
+    gates.add_argument("--baseline", metavar="BEFORE.json", help="gate only on findings not in that earlier export")
     gates.add_argument("--risk", metavar="BASE", help="score the files changed since BASE (a local clone)")
     gates.add_argument("--risk-threshold", type=float, metavar="N", help="with --risk or --hook: fail over N percent")
     gates.add_argument("--hook", action="store_true", help="with --no-run: score the files an agent hook names")
@@ -231,11 +232,13 @@ def _check_args(args, err, kind=None) -> int | None:
                "target required" if args.target is None and not args.clean else
                "--hook needs --no-run and an output directory" if args.hook and not args.no_run else
                "--risk-threshold needs --risk" if args.risk_threshold is not None and not args.risk and not args.hook else
-               "--compare: no such file: " + args.compare if args.compare and not os.path.isfile(args.compare) else None)
+               "--compare: no such file: " + args.compare if args.compare and not os.path.isfile(args.compare) else
+               "--baseline: no such file: " + args.baseline if args.baseline and not os.path.isfile(args.baseline) else None)
     elif kind == "path":
         bad = None
     else:
         bad = ("--compare needs one repository, not owner/*" if args.compare and kind == "org" else
+               "--baseline needs one repository, not owner/*" if args.baseline and kind == "org" else
                "--sbom needs one repository, not owner/*" if args.sbom and kind == "org" else
                "--risk needs a local path" if args.risk else
                "--list-file-types needs a local path" if args.list_file_types else None)
@@ -308,7 +311,7 @@ def _no_run(args, console, ui, err, stdin=None) -> int:
 def _hook(out_dir: str, args, console: Console, err: Console, stdin) -> int:
     """The agent-hook gate (see hook.py): 2 over the threshold, 0 otherwise, silent when the event
     names no file in the repository."""
-    from . import hook, watch
+    from . import gate, hook, watch
     try:
         report = load.load_report(out_dir)
     except load.Unreadable as e:
@@ -328,6 +331,11 @@ def _hook(out_dir: str, args, console: Console, err: Console, stdin) -> int:
     if args.risk_threshold is not None and risk["total"] > args.risk_threshold:
         err.print("\n".join(lines), soft_wrap=True, markup=False, highlight=False)   # exit 2: what the agent is told
         return 2
+    missing = gate.unfinished(report, gate.RISK_STEPS) if args.risk_threshold is not None else []
+    if missing:   # every file scores 0 without the log or the sizes: under the threshold, and not because it is safe
+        err.print(f"gate incomplete: {gate.describe(missing)} in the run {out_dir} holds, so these scores are not the files' "
+                  f"and --risk-threshold could not check them (exit {gate.EXIT_INCOMPLETE})", soft_wrap=True, markup=False, highlight=False)
+        return gate.EXIT_INCOMPLETE
     return 0
 
 
@@ -701,9 +709,16 @@ def _portfolio(owner: str, args, console: Console, ui: Console, planner, estimat
     if "-" not in (args.json, args.markdown):
         render.print_section(console, render.portfolio_section(reports))
         console.print(Text(f"\nPer-repository results in {base}", style="dim"), soft_wrap=True)
-    all_found = [f for _, _, found in reports for f in found]
-    if args.fail_on and any(findings.SEVERITIES.index(f["severity"]) <= findings.SEVERITIES.index(args.fail_on) for f in all_found):
-        return 3
+    if not args.fail_on:
+        return 0
+    from . import gate
+    if gate.tripped([f for _, _, found in reports for f in found], args.fail_on):
+        return gate.EXIT_FOUND
+    missing = [(name, gate.describe(gate.unfinished(report))) for name, report, _ in reports if gate.unfinished(report)]
+    if missing:
+        ui.print(f"[red]gate incomplete:[/red] {'; '.join(f'{name}: {what}' for name, what in missing)}, so --fail-on could not check "
+                 f"what those steps would have found (exit {gate.EXIT_INCOMPLETE})", soft_wrap=True)
+        return gate.EXIT_INCOMPLETE
     return 0
 
 
@@ -755,8 +770,6 @@ def _write(text: str, target: str, console: Console) -> None:
 
 
 def _render(out_dir: str, console: Console, ui: Console, args, err: Console) -> int:
-    import json
-
     from . import render
 
     try:
@@ -777,21 +790,17 @@ def _render(out_dir: str, console: Console, ui: Console, args, err: Console) -> 
     comparison = None
     if args.compare:
         from . import compare as _compare
-        try:
-            with open(args.compare, encoding="utf-8") as fh:
-                before = json.load(fh)
-        except (OSError, ValueError) as e:
-            err.print(f"[red]--compare {args.compare}:[/red] {e}", soft_wrap=True)
-            return 2
-        if not _compare.is_export(before):
-            err.print(f"[red]--compare {args.compare}:[/red] not a gitmole --json export (it needs meta, findings with rule ids, and watch; "
-                      "exports from before 0.8.0 have no rule ids)", soft_wrap=True)
-            return 2
-        if before["meta"].get("name") != report["meta"].get("name"):
-            err.print(f"[red]--compare {args.compare}:[/red] it describes {before['meta'].get('name')}, this run describes {report['meta'].get('name')}; "
-                      "the two exports must be of the same clone", soft_wrap=True)
+        before = _export(args.compare, "--compare", report, err)
+        if before is None:
             return 2
         comparison = _compare.compare(before, report, found)
+    counted = found
+    if args.baseline:
+        before = _export(args.baseline, "--baseline", report, err)
+        if before is None:
+            return 2
+        from . import gate
+        counted = gate.against_baseline(report, found, before)
     if args.json:
         _write(render.dumps_json(report, found, risk=risk, compare=comparison), args.json, console)
     if args.markdown:
@@ -810,11 +819,58 @@ def _render(out_dir: str, console: Console, ui: Console, args, err: Console) -> 
     if "-" not in (args.json, args.markdown, args.sarif, args.sbom):
         render.report(report, found, console, full=args.full, risk=risk, base=args.risk, compare=comparison)
     _feedback(report, found, args, console, err)
-    if args.fail_on and any(findings.SEVERITIES.index(f["severity"]) <= findings.SEVERITIES.index(args.fail_on) for f in found):
-        return 3
-    if risk is not None and args.risk_threshold is not None and risk["total"] > args.risk_threshold:
-        return 3
-    return 0
+    if args.baseline and args.fail_on:
+        from . import gate
+        known = [f for f in found if f.get("baseline") == "in the baseline" and gate.tripped([f], args.fail_on)]
+        if known:
+            err.print(f"[dim]--baseline: {len(known)} finding(s) at {args.fail_on} or worse were in {args.baseline} and do not count toward "
+                      f"--fail-on: {', '.join(dict.fromkeys(f['rule']['id'] for f in known))}[/dim]", soft_wrap=True)
+    return _gate_exit(report, counted, risk, args, err)
+
+
+def _export(path: str, flag: str, report: dict, err: Console):
+    """An earlier --json export of the same clone, or None after saying why not."""
+    import json
+
+    from . import compare as _compare
+    try:
+        with open(path, encoding="utf-8") as fh:
+            before = json.load(fh)
+    except (OSError, ValueError) as e:
+        err.print(f"[red]{flag} {path}:[/red] {e}", soft_wrap=True)
+        return None
+    if not _compare.is_export(before):
+        err.print(f"[red]{flag} {path}:[/red] not a gitmole --json export (it needs meta, findings with rule ids, and watch; "
+                  "exports from before 0.8.0 have no rule ids)", soft_wrap=True)
+        return None
+    if before["meta"].get("name") != report["meta"].get("name"):
+        err.print(f"[red]{flag} {path}:[/red] it describes {before['meta'].get('name')}, this run describes {report['meta'].get('name')}; "
+                  "the two exports must be of the same clone", soft_wrap=True)
+        return None
+    return before
+
+
+def _gate_exit(report: dict, found: list, risk, args, err: Console) -> int:
+    """The exit code of the gates asked for: 3 when one found what it stops on; 4 when none did and a step
+    one of them reads did not complete, so it could not check (gate.py); 0 otherwise, and always without a gate."""
+    from . import gate
+    code, missing, flags = 0, [], []
+    if args.fail_on:
+        missing, flags = gate.unfinished(report), ["--fail-on"]
+        if gate.tripped(found, args.fail_on):
+            code = gate.EXIT_FOUND
+    if risk is not None and args.risk_threshold is not None:
+        short = gate.unfinished(report, gate.RISK_STEPS)
+        missing, flags = sorted(set(missing) | set(short)), flags + (["--risk-threshold"] if short else [])
+        if risk["total"] > args.risk_threshold:
+            code = gate.EXIT_FOUND
+    if missing:
+        flags = " and ".join(flags)
+        err.print(f"[red]gate incomplete:[/red] {gate.describe(missing)}, so {flags} could not check what "
+                  f"{'that step' if len(missing) == 1 else 'those steps'} would have found"
+                  + ("" if code else f" (exit {gate.EXIT_INCOMPLETE}); run.log in the output directory says why"), soft_wrap=True)
+        code = code or gate.EXIT_INCOMPLETE
+    return code
 
 
 def _feedback(report: dict, found: list, args, console: Console, err: Console, ask=None) -> None:
