@@ -50,8 +50,12 @@ in plain words, and what to do first. This page is the reference.
    apart: `12% of commits signed by their authors (gpg 12%), 0% of the
    last year's; 50% signed by the forge on merge`. `--full` and Markdown add a Signing by year table with humans
    against bots and the busiest identities. `--full` and Markdown add a Trailers table: every hyphenated
-   trailer key and how many commits carry it, then the commits an
-   `Assisted-by` trailer or a co-author who never authors a commit marks,
+   trailer key and how many commits carry it, counted without regard to
+   case as git matches them (`Co-authored-by` and `Co-Authored-By` are one
+   row, under the more common spelling), and never an issue reference
+   such as `PAP-10182:` (capitals, a hyphen and a number) that happens to
+   end a message; then the commits an `Assisted-by` trailer, a co-author
+   who never authors a commit or a coding tool marks,
    against the rest (reverted, fixes, a file changed again within two
    weeks), with the share of the history they cover, and three neutral
    descriptors of how commits arrive (bursts of commits minutes apart,
@@ -301,7 +305,12 @@ in plain words, and what to do first. This page is the reference.
    a `${VAR}` reference is a warning that names the key and never the
    value; an instruction file (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`,
    `.github/copilot-instructions.md`) far behind the last commit, in time
-   and in commits, is a note. A `Signed-off-by` from an identity that
+   and in commits, is a note. The inventory in `provenance.json` also lists
+   the subagents and skills the tools load for a task (`.claude/agents/`,
+   `.claude/skills/*/SKILL.md`, `.codex/agents/`, `.agents/skills/*/SKILL.md`),
+   which the note leaves out, and none of these files under a template,
+   fixture, example or test directory, where they are a product's data or a
+   test's input. A `Signed-off-by` from an identity that
    co-authors commits but never authors one is a note: the Linux kernel's
    policy forbids an agent to add the Developer Certificate of Origin.
 
@@ -519,9 +528,13 @@ in plain words, and what to do first. This page is the reference.
    more differently named identities on one bare no-reply address
    (`noreply@`, `no-reply@`, `donotreply@`), as an assistant that signs each
    model version with its own name and the vendor's one address, are taken
-   for a coding tool by that shape alone; a per-account
-   `id+login@users.noreply…` address, one name alone on a no-reply address,
-   and a name a person's row also carries are people. Its lines are kept out of ownership, the knowledge map's
+   for a coding tool by that shape alone, and so is an identity whose only
+   addresses are bare no-reply mailboxes and that is credited by trailers
+   for at least nine of every ten of its commits (it authors at most one in
+   ten: an assistant is named by the person who commits). A per-account
+   `id+login@users.noreply…` address, one name alone on a no-reply address
+   that authors its own commits, and a name that a person carries who
+   authored commits under an address of their own are people. Its lines are kept out of ownership, the knowledge map's
    owners, the per-file author and minor-contributor counts, the degree of
    authorship the truck factor reads, the bus factor, the knowledge islands
    and the People rows, and a person's degree of authorship no longer
@@ -641,7 +654,10 @@ in plain words, and what to do first. This page is the reference.
    that is a distinctive word of the fuller name, the fuller name run together
    (RobinMalfait), or an initial plus the surname (nlohmann); the caption says whose; merges
    counted in a column of their own and left out of the commit count and
-   share, since merging every pull request is not writing the code; bots,
+   share, since merging every pull request is not writing the code; a row's
+   merges and its surviving code are its own, by the name and address git
+   shows, so two rows that share a display name do not each take the
+   name's whole count; bots,
    which are any author named `*[bot]`, any identity that merges with
    one (`github-actions` beside `github-actions[bot]` is one account),
    and any author whose name says bot, CI, deploy or automation, no
