@@ -68,6 +68,13 @@ class SecretsFound(unittest.TestCase):
         detail = findings.secrets_found(r)[0]["detail"]
         self.assertIn(f"2 distinct values in 2 places: 2 values of facebook-access-token in {blob}.", detail)
 
+    def test_a_value_only_inside_a_rust_test_module_is_no_finding(self):
+        """paperclip's two possible secrets were generic-password hits inside #[cfg(test)] modules of runner-core."""
+        inline = dict(self.row("h1", "src/durable/state.rs", "c1", 3471, rule="generic-password"), confidence="low", test_code=True)
+        self.assertEqual(findings.secrets_found(report(secrets=[inline])), [])
+        outside = self.row("h1", "src/durable/state.rs", "c2", 12, rule="generic-password")
+        self.assertEqual([f["rule"]["id"] for f in findings.secrets_found(report(secrets=[inline, outside]))], ["secrets_possible"])
+
     def test_test_only_secrets_do_not_fail_a_critical_gate(self):
         r = report(secrets=[self.row("h3", "tests/t.py")])
         self.assertEqual(findings.secrets_found(r), [])
@@ -675,6 +682,23 @@ class BrainMethods(unittest.TestCase):
 
     def test_nothing_without_data(self):
         self.assertEqual(findings.brain_methods(report()), [])
+
+    def test_a_function_in_a_cargo_test_double_is_not_a_brain_method(self):
+        fns = [{"file": "crates/core/src/bin/fake-server.rs", "function": "run", "ccn": 360, "nloc": 1266, "params": 0, "start": 5, "end": 1300},
+               {"file": "crates/core/src/lib.rs", "function": "serve", "ccn": 20, "nloc": 150, "params": 1, "start": 10, "end": 160}]
+        r = report(functions=fns)
+        r["meta"]["test_doubles"] = ["crates/core/src/bin/fake-server.rs"]
+        f = findings.brain_methods(r)[0]
+        self.assertEqual([x["function"] for x in f["evidence"]["functions"]], ["serve"])
+
+    def test_a_function_inside_a_rust_test_module_is_not_a_brain_method(self):
+        fns = [{"file": "src/lib.rs", "function": "big_case", "ccn": 40, "nloc": 300, "params": 0, "start": 520, "end": 820},
+               {"file": "src/lib.rs", "function": "run", "ccn": 20, "nloc": 150, "params": 1, "start": 10, "end": 160}]
+        r = report(functions=fns)
+        r["meta"]["test_modules"] = {"src/lib.rs": [[500, 900]]}
+        f = findings.brain_methods(r)[0]
+        self.assertEqual(f["evidence"]["count"], 1)
+        self.assertEqual(f["evidence"]["functions"][0]["function"], "run")
 
     def test_functions_in_test_files_are_not_brain_methods(self):
         fns = [{"file": "tests/test_all.py", "function": "test_all", "ccn": 20, "nloc": 400, "params": 1, "start": 1, "end": 400},
@@ -1464,6 +1488,14 @@ class Structure(unittest.TestCase):
         self.assertEqual((f["severity"], f["title"]), ("info", "Possibly unreferenced files"))
         self.assertIn("src/f11.py", f["detail"])
         self.assertIn("dynamic imports, plugins loaded by name and framework routing do not show", f["advice"])
+
+    def test_a_file_a_later_test_convention_names_is_left_out_of_a_saved_list(self):
+        """paperclip's list led with packages/db/src/__fixtures__/x.mjs, a Jest fixture the structure step of its day
+        did not call a test file; the render takes it out and counts one fewer."""
+        f = self.by_id(self.base(unreferenced=["src/__fixtures__/f.mjs", "src/f11.py"], unreferenced_count=3))["unreferenced_files"]
+        self.assertNotIn("__fixtures__", f["detail"])
+        self.assertEqual((f["evidence"]["count"], f["evidence"]["files"]), (2, ["src/f11.py"]))
+        self.assertNotIn("unreferenced_files", self.by_id(self.base(unreferenced=["scripts/smoke/run.mjs"], unreferenced_count=1)))
 
     def test_a_skipped_file_in_a_judged_language_is_named(self):
         """hindsight's busiest file was over the size limit, its imports vanished, and a file it imports read as
