@@ -784,7 +784,8 @@ def functions_section(report: dict, full: bool = True, width=None) -> dict:
     """Functions at or over the complexity floor, worst first, from lizard when it is installed."""
     cls = classify.Classifier(report)
     measured = report.get("functions") or []
-    funcs = sorted((f for f in measured if f["ccn"] >= CCN_FLOOR), key=lambda f: (-f["ccn"], -f["nloc"], f["file"], f["function"], f["start"]))
+    # a span lizard may have mis-parsed goes after every one it did not: its complexity may be the next function's too
+    funcs = sorted((f for f in measured if f["ccn"] >= CCN_FLOOR), key=lambda f: (bool(f.get("suspect")), -f["ccn"], -f["nloc"], f["file"], f["function"], f["start"]))
     funcs, hidden_note = _hide_tests(funcs, lambda f: f["file"], full, noun="function in a test file", plural="functions in test files", classifier=cls)
     funcs, vendor_note = _hide_vendor(funcs, lambda f: f["file"], full, noun="function in vendored code", plural="functions in vendored code", report=report, classifier=cls)
     funcs, sample_note = _hide_by(funcs, lambda f: f["file"], full, cls, {"example code"}, "function in example code", "functions in example code")
@@ -792,9 +793,12 @@ def functions_section(report: dict, full: bool = True, width=None) -> dict:
     hidden_note = _join_hidden(hidden_note, vendor_note, sample_note, generated_note)
     limit = _limit("Complex functions", full)
     shown = funcs[:limit]
-    rows = [(textfmt.ANONYMOUS if _nameless(f) else f["function"], _where(f), f"{f['ccn']}{SUSPECT_MARK}" if f.get("suspect") else f["ccn"], f["nloc"], f["params"]) for f in shown]
+    rows = [(textfmt.ANONYMOUS if _nameless(f) else f["function"], _where(f), _ccn_cell(f), f["nloc"], f["params"]) for f in shown]
     suspects = sum(1 for f in shown if f.get("suspect"))
     suspect_note = f"{SUSPECT_MARK} marks {suspects} span{'s' if suspects != 1 else ''} lizard may have mis-parsed" if suspects else None
+    cut = sum(1 for f in shown if f.get("lizard_span"))
+    cut_note = (f"{FLOOR_MARK} marks {cut} function{'s' if cut != 1 else ''} lizard ended early: the lines are the structure step's, "
+                f"the complexity what lizard counted before it stopped") if cut else None
     columns = [("function", {"overflow": "fold"}), ("file", PATH), ("ccn", RIGHT), ("lines", RIGHT), ("params", RIGHT)]
     status = (report["meta"].get("functions") or {}).get("status", "skipped" if not measured else "run")
     reason = {"timeout": "function metrics timed out", "failed": "function metrics failed (see run.log)",
@@ -810,11 +814,18 @@ def functions_section(report: dict, full: bool = True, width=None) -> dict:
                            f"nothing over complexity {CCN_FLOOR} in source files {counted}")
     else:
         note = None
-    caption = "; ".join(c for c in (_more(len(funcs), limit), None if note else hidden_note, partial, suspect_note) if c) or None
+    caption = "; ".join(c for c in (_more(len(funcs), limit), None if note else hidden_note, partial, suspect_note, cut_note) if c) or None
     return _section("Complex functions", columns, rows, note=note, caption=caption)
 
 
 SUSPECT_MARK = "?"
+FLOOR_MARK = "+"   # at least this: lizard counted only the part of the function it read (load.cross_check)
+
+
+def _ccn_cell(f: dict):
+    if f.get("suspect"):
+        return f"{f['ccn']}{SUSPECT_MARK}"
+    return f"{f['ccn']}{FLOOR_MARK}" if f.get("lizard_span") else f["ccn"]
 
 
 def _nameless(f: dict) -> bool:
@@ -946,7 +957,29 @@ def sections(report: dict, full: bool = True, width=None) -> list:
         sec = b(report, full, width)
         sec["id"] = sid
         out.append(sec)
+    if width is not None:
+        homes = _homes(report, out)
+        for sec in out:
+            sec["homes"] = homes
     return out
+
+
+def _homes(report: dict, secs: list) -> dict:
+    """The tracked paths by file name, for the names the path columns show that two or more paths share: what
+    fit() must not shorten one of them into. One pass over the tree listing (the size step's files for a run
+    from before it), and only when a table's path is cut would a reader take it for another."""
+    names = set()
+    for sec in secs:
+        for i, o in enumerate(sec["col_opts"]):
+            if o.get("kind") == "path":
+                names.update(_base(r[i]) for r in sec["rows"])
+    tracked = report.get("tree") or ((report.get("size") or {}).get("files") or {}).keys()
+    homes = {}
+    for p in tracked:
+        name = p.rsplit("/", 1)[-1]
+        if name in names:
+            homes.setdefault(name, []).append(p)
+    return {k: v for k, v in homes.items() if len(v) > 1}
 
 
 SECRET_FINDINGS = ("secrets_in_source", "secrets_possible", "secrets_declared", "secrets_local")
@@ -1183,12 +1216,28 @@ def _kind(name: str, opts: dict) -> str:
     return "prose" if opts.get("ratio") else "name"
 
 
-def _fit_cell(kind: str, text: str, width: int) -> str:
+def _fit_cell(kind: str, text: str, width: int, others=()) -> str:
     if len(text) <= width:
         return text
     if kind == "path":
-        return textfmt.cut_path(text, width)
+        return textfmt.cut_path(text, width, others)
     return textfmt.cut_middle(text, width)
+
+
+def _base(cell: str) -> str:
+    return textfmt.LINE_SUFFIX.sub("", cell).rstrip("/").rsplit("/", 1)[-1]
+
+
+def _namesakes(sec: dict, i: int) -> list:
+    """For each row, the paths its cell in column `i` must not be shortened into: the column's other paths
+    and the tracked files (sec["homes"], from sections) with the same name."""
+    homes = sec.get("homes") or {}
+    column = [textfmt.LINE_SUFFIX.sub("", r[i]) for r in sec["rows"]]
+    same = {}
+    for p in column:
+        same.setdefault(_base(p), set()).add(p)
+    return [sorted(same[_base(p)] | set(homes.get(_base(p), ()))) if len(same[_base(p)]) > 1 or len(homes.get(_base(p), ())) > 1 else []
+            for p in column]
 
 
 def fit(sec: dict, width) -> dict:
@@ -1218,6 +1267,10 @@ def fit(sec: dict, width) -> dict:
 
     def longest_word(i):
         return max(cell_len(w) for r in rows for w in (r[i].split() or [""]))
+
+    # the paths a cut path must not read as; they change what a cell shows within its width, never the widths,
+    # so keeping two files apart costs no column its room and no row a line
+    namesakes = {i: _namesakes(sec, i) for i, k in enumerate(kinds) if k == "path"}
 
     def name_floor(i):   # what a column keeps before anything is cut: whole file names, NAME_KEEP of a name
         if kinds[i] == "path":
@@ -1269,7 +1322,8 @@ def fit(sec: dict, width) -> dict:
             if not cand:
                 break
             widths[max(cand, key=lambda i: widths[i])] -= 1
-    fitted = [tuple(_fit_cell(kinds[i], r[i], widths[i]) if kinds[i] in ("path", "name") else r[i] for i in keep) for r in rows]
+    fitted = [tuple(_fit_cell(kinds[i], r[i], widths[i], namesakes[i][n] if i in namesakes else ()) if kinds[i] in ("path", "name") else r[i] for i in keep)
+              for n, r in enumerate(rows)]
     col_opts = [dict(opts[i], width=widths[i]) for i in keep]
     caption = sec.get("caption")
     if dropped:
