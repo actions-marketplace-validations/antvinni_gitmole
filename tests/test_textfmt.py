@@ -14,10 +14,30 @@ class ShortenPath(unittest.TestCase):
     def test_elides_more_when_needed(self):
         p = "packages/core/src/repowise/core/pipeline/persist.py"
         self.assertEqual(textfmt.shorten_path(p, 24), "…/pipeline/persist.py")
+        self.assertEqual(textfmt.shorten_path(p, 18), "…/persist.py")
         self.assertEqual(textfmt.shorten_path(p, 14), "…/persist.py")
 
     def test_never_cuts_the_file_name(self):
         self.assertEqual(textfmt.shorten_path("a/b/a_very_long_file_name.py", 10), "…/a_very_long_file_name.py")
+
+    def test_the_nearest_directory_before_the_first_and_the_first_before_none(self):
+        # the parent says more about a file than the top directory does: …/BlogListPage/index.tsx
+        p = "docs/src/theme/BlogListPage/index.tsx"
+        self.assertEqual(textfmt.shorten_path(p, 26), "…/BlogListPage/index.tsx")
+        self.assertEqual(textfmt.shorten_path(p, 20), "docs/…/index.tsx")
+        self.assertEqual(textfmt.shorten_path(p, 15), "…/index.tsx")
+
+    def test_a_directory_keeps_its_own_name_never_the_empty_one_after_its_slash(self):
+        self.assertEqual(textfmt.shorten_path("hindsight-api-slim/", 0), "hindsight-api-slim/")
+        self.assertEqual(textfmt.shorten_path("packages/core/src/", 0), "…/src/")
+        self.assertEqual(textfmt.shorten_path("packages/core/src/", 12), "…/core/src/")
+        self.assertEqual(textfmt.shorten_path("packages/core/src/", 16), "…/core/src/")
+
+    def test_cut_path_cuts_a_directory_name_in_its_middle_keeping_the_slash(self):
+        cut = textfmt.cut_path("hindsight-api-slim/", 14)
+        self.assertEqual(len(cut), 14)
+        self.assertTrue(cut.startswith("hindsi") and cut.endswith("-slim/") and "…" in cut, cut)
+        self.assertEqual(textfmt.cut_path("a/b/memory_engine.py", 12), textfmt.cut_middle("…/memory_engine.py", 12))
 
     def test_root_files(self):
         self.assertEqual(textfmt.shorten_path("Makefile", 5), "Makefile")
