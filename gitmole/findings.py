@@ -217,11 +217,13 @@ def placeholder_identity(report: dict, min_share: float = 0.01) -> list:
 
 
 def _source_ownership(report: dict) -> list:
-    """Ownership rows for source files. Test files and vendored trees are left out of every rule that
-    names a next step: owning the tests is not the knowledge risk, and whoever imported vendor/ did
-    not write it. The default tables leave test files out too."""
-    vendored = filetypes.vendor_dirs(report)
-    return [r for r in report.get("ownership") or [] if not (filetypes.is_test_path(r["entity"]) or filetypes.is_vendored(r["entity"], vendored))]
+    """Ownership rows for source files. Test files, vendored trees and generated files are left out of every
+    rule that names a next step: owning the tests is not the knowledge risk, whoever imported vendor/ did
+    not write it, and whoever last ran a generator did not write its output (pairing someone on a generated
+    client is advice about who runs the generator). The default tables leave test files out too."""
+    vendored, generated = filetypes.vendor_dirs(report), _generated(report)
+    return [r for r in report.get("ownership") or []
+            if not (filetypes.is_test_path(r["entity"]) or filetypes.is_vendored(r["entity"], vendored) or r["entity"] in generated)]
 
 
 def _present_areas(report: dict, rows: list, build=knowledge.areas) -> list:
@@ -1462,9 +1464,15 @@ def unreferenced_files(report: dict) -> list:
     if not paths:
         return []
     n = s.get("unreferenced_count", len(paths))
-    return [_f("info", "Possibly unreferenced files", f"{_plural(n, 'file')} {'is' if n == 1 else 'are'} imported by nothing in the tree and {'is' if n == 1 else 'are'} no entry point: {_files_list(paths, 5)}.",
+    # a file too big to parse imports what it imports unseen: say so, in a language the list judges
+    judged = {info.get("language") for p, info in (s.get("files") or {}).items() if p in set(paths)}
+    unseen = [r for r in s.get("skipped") or [] if (structure.GRAMMARS.get(os.path.splitext(r.get("file") or "")[1].lower()) or ("",))[0] in judged]
+    blind = (f" {_files_list([r['file'] for r in unseen], 2)} {'was' if len(unseen) == 1 else 'were'} too big to parse ({unseen[0]['reason']}), "
+             f"so what {'it imports' if len(unseen) == 1 else 'they import'} is not seen.") if unseen else ""
+    return [_f("info", "Possibly unreferenced files", f"{_plural(n, 'file')} {'is' if n == 1 else 'are'} imported by nothing in the tree and {'is' if n == 1 else 'are'} no entry point: {_files_list(paths, 5)}.{blind}",
                f"Check {paths[0]} before anything else; dynamic imports, plugins loaded by name and framework routing do not show in an import graph.",
-               rule={"id": "unreferenced_files", "ref": "Romano et al., TSE 2020"}, evidence={"count": n, "files": paths[:10]})]
+               rule={"id": "unreferenced_files", "ref": "Romano et al., TSE 2020"},
+               evidence={"count": n, "files": paths[:10], **({"skipped": unseen[:10]} if unseen else {})})]
 
 
 def _agents(report: dict) -> dict:
