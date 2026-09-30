@@ -11,7 +11,8 @@ Two gitmole-specific points. Dedup: without a fingerprint the REST upload duplic
 result carries `partialFingerprints["gitmole/v1"]`, a hash of rule, path, commit and line, derived
 from non-secret data, so two runs agree although the keyed value hashes in secrets.json never do.
 Scope: a secret in an old commit, a sweeping commit, a file no longer in the tree have no
-HEAD location; `--sarif-scope head` (the default) keeps only results whose file is in the tree, and
+HEAD location; `--sarif-scope head` (the default) keeps only results whose file is in the tree (for a
+secret, whose file at HEAD still holds the value, at the line that does), and
 `history` keeps everything, with the commit under `properties.commit`. A finding the head scope would
 leave with no result at all keeps one without a location (`properties.inTree` false), so every finding
 --fail-on can stop on is in the document."""
@@ -99,23 +100,28 @@ def _in_tree(report: dict, path: str) -> bool:
 
 def _secret_results(report: dict, f: dict, scope: str) -> list:
     """One result per distinct (file, commit, line) the scanner reported under this finding's files, from
-    the rows themselves, so the line and the commit are the scanner's; placeholders are not secrets."""
+    the rows themselves, so the line and the commit are the scanner's; placeholders are not secrets. A value
+    the repository declared allowed is secrets_declared's, and no other finding's, though they share a file."""
     wanted = set((f.get("evidence") or {}).get("files") or [])
+    declared = {g["value"] for g in leaks.group(report.get("secrets") or []) if g.get("declared") and g.get("value")}
+    mine = f["rule"]["id"] == "secrets_declared"
     seen, out = set(), []
     for r in report.get("secrets") or []:
-        if r.get("placeholder") or r["file"] not in wanted:
+        if r.get("placeholder") or r["file"] not in wanted or (r.get("value") in declared) != mine:
             continue
         key = (r["file"], r["commit"], r.get("line"))
         if key in seen:
             continue
         seen.add(key)
-        at_head = _in_tree(report, r["file"])
+        # the value itself decides, where the scan recorded it: a file still in the tree need not hold it any more
+        at_head = r["at_head"] if isinstance(r.get("at_head"), bool) else _in_tree(report, r["file"])
         if scope == "head" and not at_head:
             continue
         line_text = f", line {r['line']} of that commit's version" if r.get("line") else ""
+        head_text = f"; at HEAD, line {r['head_line']}" if scope == "head" and r.get("head_line") else ""
         out.append(_result(f["rule"]["id"], LEVELS[f["severity"]], SEVERITY[f["severity"]],
-                           f"{r['rule']} in {r['file']} at commit {r['commit']}{line_text}", r["file"],
-                           None if scope == "head" else r.get("line"), r["commit"]))
+                           f"{r['rule']} in {r['file']} at commit {r['commit']}{line_text}{head_text}", r["file"],
+                           r.get("head_line") if scope == "head" else r.get("line"), r["commit"]))
         out[-1]["partialFingerprints"]["gitmole/v1"] = _fingerprint(f["rule"]["id"], r["file"], r["commit"], r.get("line"))
     return out
 
