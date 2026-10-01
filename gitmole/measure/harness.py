@@ -185,23 +185,35 @@ class LoadSampler:
         return {"min": round(s[0], 2), "median": round(median, 2), "max": round(s[-1], 2), "samples": len(s)}
 
 
+CACHE_DIR = "cache"   # under a run's work directory: its own GITMOLE_CACHE, empty at the start, removed at the end
+
+
 def run_release(src: str, clone: str, work: str, reference: str, fail_on: bool = False, timeout: float = MAIN_TIMEOUT, env_extra: dict = None,
                 extra_args=()) -> dict:
     """One ordinary run of the release on the clone: `gitmole CLONE --out OUT --json REPORT`, timed and
     measured. Returns status (ok, refused, crashed, timeout), the note, the files it left. `extra_args`
-    are options added after those: a run that is not the ordinary one (remediation's) says so there."""
+    are options added after those: a run that is not the ordinary one (remediation's) says so there.
+
+    Every run starts from an empty cache of its own (GITMOLE_CACHE, the structure step's parse cache and
+    the feedback state beside it), removed when the run is over: a timed run's structure cost is a first
+    run's, whatever ran before it on this machine, and runs side by side (remediation's cut-offs) never
+    share one. `env_extra` may name another."""
     if os.path.isdir(work):
         shutil.rmtree(work)
     os.makedirs(work)
     out, report, stats = os.path.join(work, "out"), os.path.join(work, "report.json"), os.path.join(work, "stats.json")
+    cache = os.path.join(work, CACHE_DIR)
     argv = [sys.executable, os.path.join(HERE, "wrap.py"), stats, "--", sys.executable, "-m", "gitmole", clone, "--out", out, "--json", report]
     if fail_on:
         argv += ["--fail-on", "critical"]
     argv += list(extra_args)
     with open(os.path.join(work, "stdout.txt"), "w") as so, open(os.path.join(work, "stderr.txt"), "w") as se:
         load, power = os.getloadavg()[0], power_source()
-        with LoadSampler() as sampler:
-            killed = _spawn(argv, src, _env(src, reference, env_extra), so, se, timeout)
+        try:
+            with LoadSampler() as sampler:
+                killed = _spawn(argv, src, _env(src, reference, {"GITMOLE_CACHE": cache, **(env_extra or {})}), so, se, timeout)
+        finally:
+            shutil.rmtree(cache, ignore_errors=True)   # our own directory under the run's, never the user's cache
     with open(os.path.join(work, "stderr.txt"), encoding="utf-8", errors="replace") as fh:
         err = fh.read()
     st = {}
