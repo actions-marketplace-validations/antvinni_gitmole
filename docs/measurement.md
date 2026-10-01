@@ -315,9 +315,10 @@ development set's run time, in the untimed half beside the rankings: roughly
 15 to 20 minutes more wall time per release round. The record
 keeps the outcome counts by rule (`remediation` on each entry), the summary
 pools them over the development set, and the history page prints the table.
-As it stands it counts a subject still named at several cut-offs at each, and
-a file moved or renamed as having left the tree; those are changes to the
-yardstick, and this table is their before.
+A subject that was renamed or moved is followed through git's rename
+detection (limit pinned) and judged at its new path, and counts as *moved*,
+never as fixed; a subject still named at several cut-offs of one repository is
+counted once, at the first, and the later ones as repeats.
 
 ## Description accuracy
 
