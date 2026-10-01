@@ -208,9 +208,14 @@ def current(record: dict, extras: dict) -> list:
                      f"power {rnd.get('power') or 'unknown'}, {rnd.get('awake') or 'keep-awake not recorded'}"))
     rows.append(("scored share of tracked files", "development", _pct(s.get("scored_share"))))
     acted = s.get("remediation")
-    rows.append(("subjects the repository acted on within six months, mechanical and structural rules (a lower bound)", "development",
-                 "; ".join(f"{k} {_acted(b)}" for k, b in acted["bands"].items()) or "no scored rule fired"
-                 if acted else "not in this record"))
+    if acted and acted.get("asked") is False:   # the round did not ask: a gap with its reason, and no table
+        rows.append(("subjects the repository acted on within six months, mechanical and structural rules (a lower bound)", "development",
+                     f"not asked ({acted.get('reason') or 'no reason recorded'})"))
+        acted = None
+    else:
+        rows.append(("subjects the repository acted on within six months, mechanical and structural rules (a lower bound)", "development",
+                     "; ".join(f"{k} {_acted(b)}" for k, b in acted["bands"].items()) or "no scored rule fired"
+                     if acted else "not in this record"))
     clean = s.get("claims_clean")
     rows.append(("findings whose text agrees with their own numbers", "every set",
                  f"{clean[0]} of {clean[1]}" if clean else "not checked in this record"))
