@@ -36,7 +36,7 @@ in plain words, and what to do first. This page is the reference.
 ## The terminal report
 
 1. **Header**: commits, date span, identities, branch, size, top languages,
-   one line for the share of fix commits, the share that are reverts when
+   one line for the share of fix commits, the share that are reverts (git's `Revert "…"` subject or its `This reverts commit <sha>` body line) when
    there are any (the busiest weekday and hour are `--full`'s Activity
    table), the year most surviving code was written (or why the blame pass did not run), and the share of
    commits signed and by what (`51% of commits signed (gpg 49%, ssh 2%),
@@ -54,14 +54,16 @@ in plain words, and what to do first. This page is the reference.
    case as git matches them (`Co-authored-by` and `Co-Authored-By` are one
    row, under the more common spelling), and never an issue reference
    such as `PAP-10182:` (capitals, a hyphen and a number) that happens to
-   end a message; then the commits an `Assisted-by` trailer, a co-author
+   end a message; then the declared commits, those an `Assisted-by` trailer, a co-author
    who never authors a commit or a coding tool marks,
-   against the rest (reverted, fixes, a file changed again within two
+   against the rest (reverted, by git's `Revert "…"` subject or its
+   `This reverts commit <sha>` body line; fixes; a file changed again within two
    weeks), with the share of the history they cover, and three neutral
    descriptors of how commits arrive (bursts of commits minutes apart,
    conventional-commit subjects, hours of the day). This
    repository against itself, with no prior from elsewhere, and nothing is
-   labelled: every descriptor has an ordinary cause. With `--full`, and always in Markdown, a coverage
+   labelled: every descriptor has an ordinary cause. The rest is every commit that declares
+   nothing, which includes any agent use nobody disclosed; it is never a group of people. With `--full`, and always in Markdown, a coverage
    line counts the tracked text files by why they are out of the scored
    pool: `4,512 files: 582 scored · 13 generated · 2,680 test files · 139
    example code · 3 release files · 1,095 not a source type`, and a file of
@@ -788,6 +790,7 @@ directory for a remote target:
 | `secrets.json` | betterleaks | secret-looking strings across HEAD's history: rule, file, commit, line and fingerprint, with each value replaced by a short keyed hash |
 | `dependencies.json` | osv-scanner | the lock files with their package counts, one row per package with a known vulnerability (ids, CVE aliases, score, fixed version, whether an advisory is a `MAL-` record, and for a row from a pip requirement file its specifier and whether that pins one version); on each lock file, the workspace members it pins and the entry points declared there, and the directories compose files build from, the database date and a digest of that snapshot; or a status: no lock files, no local database |
 | `packages.json` | osv-scanner, with or without its database | every package the lock files pin, once per ecosystem, name and version, with the lock files that pin it and the licence a lock file declares; read by `--sbom`, not part of the report |
+| `reverts.txt` | git | the commits whose message carries git revert's body line `This reverts commit <sha>`, each hash with its message body: the change analysis and the cohort count them as reverts whatever their subject says |
 | `log.txt` | git | the numstat log export the change analysis reads, whitespace ignored, with each commit's `Co-authored-by` trailers behind its subject |
 | `maat-revisions.csv` | change analysis | change frequency per file |
 | `maat-coupling.csv` | change analysis | files that change together, over logical changes (a ticket's commits, or one author's day) |
@@ -811,5 +814,5 @@ directory for a remote target:
 | `hygiene.json` | hygiene step | each hygiene check's raw result: unpinned actions, lock-file drift, update coverage, policy files, dependency confusion shapes, install scripts, binaries, submodules, symlinks, Trojan Source, the declared licences, the declared dependencies nothing imports |
 | `unreachable.json` | secrets step | objects no ref reaches, the blobs among them, how many were scanned and how many findings they gave; a property of this clone, so the `--json` export carries the counts in its `envelope` |
 | `structure.json` | structure step, Python 3.10 or newer | per file: language, lines, comments, TODO/FIXME/XXX/HACK markers with a sample, top-level definitions, the files it imports and which of those only after it loads (`deferred`) — resolved for Python (from a root), JavaScript and TypeScript (relative paths), C and C++ (quoted includes), Ruby (`require_relative`, and `require` of a tracked file) and Go (an import path against the `module` and relative `replace` lines of the go.mod files in the tree; a Go import names a package, so it is an edge to every file of that directory the build compiles into it, `_test.go` and `package main` aside), while Rust, Java, C# and PHP imports stay unresolved — its deepest nesting and highest cognitive complexity; the notable functions (nesting, cognitive complexity, complex conditions, bumps); how many imports resolved per language; the empty catch blocks, string-literal addresses and commented-out code lines per file; the possibly unreferenced files; or a status saying how to install it |
-| `provenance.json` | provenance step | trailer keys, co-authors who never author, sign-offs by them, the marked cohort against the rest (with each side's watch-list hit rate), the lines added, moved and churned within two weeks in the last year and the year before, the commit-shape descriptors, and the agent files (instructions and how far behind, guardrails, approval settings, personal settings tracked, MCP declarations with the keys of literal values) |
+| `provenance.json` | provenance step | trailer keys, co-authors who never author, sign-offs by them, the declared commits against the rest (with each side's watch-list hit rate; the JSON keeps the keys `cohort` and `marked`), the lines added, moved and churned within two weeks in the last year and the year before, the commit-shape descriptors, and the agent files (instructions and how far behind, guardrails, approval settings, personal settings tracked, MCP declarations with the keys of literal values) |
 | `run.log` | gitmole | every command run and its stderr |
