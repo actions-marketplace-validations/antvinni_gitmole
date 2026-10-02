@@ -739,10 +739,10 @@ def lines_section(report: dict, full: bool = True, width=None) -> dict:
 
 
 def hotspots_section(report: dict, full: bool = True, width=None) -> dict:
-    """Change frequency times size, Tornhill-style. Files no longer in the tree sort last. Drawn
-    under `--full` and in the Markdown export only; the default terminal report leaves it to the
-    watch list, which ranks the same files. Built only for those two, it has no row cap of its
-    own outside Markdown's."""
+    """Change frequency times size, Tornhill-style. Drawn under `--full` and in the Markdown export
+    only; the default terminal report leaves it to the watch list, which ranks the same files. Built
+    only for those two, it has no row cap of its own outside Markdown's. Files no longer in the tree
+    have nothing to score: Markdown hides them like any hidden row, `--full` counts them in one line."""
     authors = {a["entity"]: a["n-authors"] for a in report.get("authors") or []}
     minors = {a["entity"]: a.get("minor", 0) for a in report.get("authors") or []}
     partners = {a["entity"]: a.get("partners", 0) for a in report.get("soc") or []}
@@ -755,6 +755,18 @@ def hotspots_section(report: dict, full: bool = True, width=None) -> dict:
     scored, generated_note = _hide_generated(scored, lambda h: h["entity"], report, full, classifier=cls)
     scored, release_note = _hide_by(scored, lambda h: h["entity"], full, cls, {"release file"}, "release file")
     hidden_note = _join_hidden(hidden_note, deleted_note, generated_note, release_note)
+    removed_note = None
+    tracked = report.get("tree") or (report.get("size") or {}).get("files") or {}
+    if full is True and tracked:
+        # --full hides nothing, but a file that is no longer tracked has no lines, no complexity and no score:
+        # its row is three dashes. superpowers spent 412 of 483 rows on them, 318 from an import later removed.
+        removed = [h for h in scored if h["code"] is None and h["entity"] not in tracked]
+        if removed:
+            scored = [h for h in scored if not (h["code"] is None and h["entity"] not in tracked)]
+            imported = report.get("imported") or ()
+            brought = sum(1 for h in removed if h["entity"] in imported)
+            removed_note = (f"{len(removed):,} removed file{'s' if len(removed) != 1 else ''} not listed"
+                            + (f", {brought:,} from left-out imports" if brought else "") + " (maat-revisions.csv has them)")
     title = "Hotspots (score = revisions × lines of code)" if full is True else "Hotspots"
     limit = _limit("Hotspots", full)
     series = (report.get("trend") or {}).get("files") or {}
@@ -776,7 +788,7 @@ def hotspots_section(report: dict, full: bool = True, width=None) -> dict:
     if full is not True:
         columns, rows = _keep(columns, rows, ["file", "revs", "lines", "fixes", "authors", "trend"])
     note = None if rows else _empty_note(None, hidden_note, "no source hotspots")
-    notes = [c for c in (_more(len(scored), limit), None if note else hidden_note) if c]
+    notes = [c for c in (_more(len(scored), limit), None if note else hidden_note, removed_note) if c]
     if series:
         notes.append(f"trend sampled for the top {TREND_TOP} hotspots")   # the rest of the column is empty by design
     return _section(title, columns, rows, note=note, caption="; ".join(notes) or None)
@@ -974,6 +986,9 @@ def knowledge_section(report: dict, full: bool = True, width=None) -> dict:
     elif not shown:
         columns, rows = _keep(columns, rows, [c[0] for c in columns[:-1]])
     notes = [c for c in (_more(len(areas), limit), hidden_note) if c]
+    from .findings import imports_gone_note
+    if (left := imports_gone_note(report)):   # an import that is gone is no finding: said here, where ownership is read
+        notes.append(left)
     if shown:
         notes.append("agents: the lines trailers credit to coding tools, told by their no-reply address (identity.tools)")
     if gone:
@@ -1695,7 +1710,7 @@ def dumps_json(report: dict, findings: list, risk: dict = None, compare: dict = 
 
 
 def to_json(report: dict, findings: list, risk: dict = None, compare: dict = None) -> dict:
-    out = {**{k: v for k, v in report.items() if k not in ("backtest", "tree")}, "findings": findings,   # the sub-report is a report of its own; the listing is the clone's
+    out = {**{k: v for k, v in report.items() if k not in ("backtest", "tree", "imported")}, "findings": findings,   # the sub-report is a report of its own; the listing is the clone's
            "watch": [{k: v for k, v in r.items() if k != "function"} | {"function": r["function"]["function"] if r["function"] else None}
                      for r in watch.risks(report)[:WATCH_FULL]]}
     out["watch_by_component"] = [{"component": g["component"], "share": round(g["share"], 3), "files": [x["file"] for x in g["files"]]}

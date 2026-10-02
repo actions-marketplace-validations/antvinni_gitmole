@@ -558,7 +558,17 @@ in plain words, and what to do first. This page is the reference.
    creating a file, and the code-age pass credits its surviving lines to
    nobody (they still count for their year). A note names it with its
    share, since the knowledge tables then read differently from a plain
-   git blame. A commit's `Co-authored-by` trailers (git's own trailer,
+   git blame. The rule counts code files, so the note labels them and
+   gives the commit's own totals beside them (`313 code files of 722;
+   40,853 lines of code of 83,997`), the vendored directory everything it
+   added sits under when there is one (`node_modules/`, `vendor/`,
+   `third_party/`), and the binary files it carried. An import nothing of
+   which is tracked any more, because the log shows every file it brought
+   in deleted since, changes no table about the tree: it is no finding,
+   and one line under the knowledge map says which commit removed most
+   of it; `activity.imports` in the JSON keeps the row (`in_tree`,
+   `removed_in`). What an import brought in is read from the log, as the
+   paths it added to that no earlier commit touched. A commit's `Co-authored-by` trailers (git's own trailer,
    which GitHub adds to a squash merge and pair programmers add by hand)
    name people who count as its authors too: in the People table,
    credited with the commits they are named on, through `.mailmap` and the
@@ -749,7 +759,9 @@ in plain words, and what to do first. This page is the reference.
    exists, and shows a directory whose files all change together (generated
    tables, one file per version) as one row with the file count and the
    weakest degree; the caption counts both and `--full` shows every pair.
-   Hotspots hide files no longer in the tree the same way. Hotspots carry a `trend` column, sampled for the
+   Hotspots hide files no longer in the tree the same way; `--full`, which hides nothing else, gives them one
+   line (`412 removed files not listed, 312 from left-out imports`), since a file that is gone has no lines,
+   complexity or score to show, and `maat-revisions.csv` still lists every one. Hotspots carry a `trend` column, sampled for the
    top hotspots: the change in complexity over the last year from scc on
    the file at sampled commits, `-` when no sample is a year old (`--full`
    shows the whole series as a sparkline), and under `--full` a `minors` column (contributors with a
@@ -840,7 +852,12 @@ in plain words, and what to do first. This page is the reference.
    forty or more lines are code, or it has no name and nothing near its
    start line opens a function, as with a JSX ternary read as one), the
    caption says how many, and such spans are left out of the brain
-   methods finding. Activity and the
+   methods finding. Where the structure step parsed the file cleanly and
+   ends the same function less than half as far on, the row's lines are
+   the structure step's (a 36-line function no longer reads as 339); the
+   complexity is still lizard's, counted over what it swallowed, and the
+   `?` stays; `lizard_overrun` in the JSON keeps lizard's own end and
+   lines. Activity and the
    timeline cover the whole history.
 6. **Footer**: where the files and plots are. `--full` and Markdown close
    with a Run line above it: what produced the report, gitmole's version,
