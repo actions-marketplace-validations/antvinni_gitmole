@@ -622,9 +622,11 @@ Reinartz gone`, `2019-01 gone`); blank means active.
    checked the lock files and found nothing. Neither is counted as a
    finding. When a scan did not run, because the step was killed or
    `--no-run` points at an output directory without its file, the row says
-   `not scanned` where the verdict would be. The Markdown export carries
-   the two passes as `**ok**` lines under its findings. Until 0.44.0 the
-   terminal report had them as two green ✔ lines closing the Findings.
+   `not scanned` where the verdict would be. The Markdown export has the
+   same section under the same title, a row an item; the portfolio export,
+   which has no such section, says each pass as an `Ok:` line under a
+   repository's findings. Until 0.44.0 the terminal report had them as two
+   green ✔ lines closing the Findings.
 
    Vulnerable dependencies come from osv-scanner over the lock files,
    offline against the local copy of the OSV database (see
@@ -726,7 +728,7 @@ Reinartz gone`, `2019-01 gone`); blank means active.
    rule (an AWS key id, a Slack token) stays critical at any grade.
 
    Shapes that cannot be a live secret are left out, counted on the
-   `secrets` row in `--full` and on the Markdown export's `Secrets:` line: version strings, tokens shortened with "...", a dotted
+   `secrets` row in `--full` and in Markdown: version strings, tokens shortened with "...", a dotted
    path of lowercase words such as `passwords.password` (a translation or
    config key), whole-value
    template markers such as `your-project-id`, `<your-token>`, `XXXX-XXXX`
@@ -768,7 +770,7 @@ Reinartz gone`, `2019-01 gone`); blank means active.
    less those a ref reaches, writes the blobs among them (up to a cap on
    count and size) under the output directory for one `betterleaks dir`
    pass, removes them again, and reports what it finds as `(unreachable
-   blob <hash>)`; the `secrets` row in `--full`, and the Markdown export's `Secrets:` line, say how many it scanned, or that there were
+   blob <hash>)`; the `secrets` row in `--full` and in Markdown says how many it scanned, or that there were
    none, which is what a fresh clone looks like, since a clone fetches only
    what a ref reaches. What each clone happens to hold is its own, not the
    commit's, so the counts sit in the `--json` export's `envelope` and a
@@ -1157,7 +1159,7 @@ Reinartz gone`, `2019-01 gone`); blank means active.
    bug-magnet findings: a version file or a manifest changes on every
    release by design, not because anything is wrong with it. Plumbing is
    known by name (`version.py`, `package.json`, lock files, changelogs)
-   and by behaviour: `maat-plumbing.csv` lists files with twenty commits
+   and by behaviour: `maat-plumbing.csv`, written when it has a row, lists files with twenty commits
    or more where at least four in five swapped no more than three lines
    for as many, a version constant in `__init__.py` or the three fields
    of a version struct being the usual case. Vendored and generated code is left out of the
@@ -1265,7 +1267,10 @@ Reinartz gone`, `2019-01 gone`); blank means active.
      named here only when they were drawn (`2 plots drawn (code-age.png,
      survival.png)`);
    - `gitmole DIR --no-run --full re-renders this run, DIR being the path
-     below.`;
+     below.`, or, once a run has written the digest of the findings into
+     that directory, `gitmole DIR --no-run --full re-renders this run;
+     findings.json is in DIR, below.`: the same line, so the file is named
+     at no cost in lines (see [The output directory](#the-output-directory));
    - the output directory's path, alone on the last line.
 
    `--full` closes with the steps line, a Run line (what produced the
@@ -1278,14 +1283,61 @@ Reinartz gone`, `2019-01 gone`); blank means active.
    which `--sbom` reads), a line naming `--sarif PATH`, `--sbom PATH` and
    `--json PATH`, `A table stops at 50 rows; --section NAME prints one
    whole.`, and `Full results in …` (`Full results and plots in …`
-   only when the directory holds a plot). Markdown keeps its `Secrets:`
-   and `Dependencies:` lines with each scan's totals, the Run line, the
-   line saying a table stops at 50 rows, and the `Full results` line.
-   Without `--full` it carries the sections it always carried, not the
-   three `--full` gained; with `--full`, all of them under the same cap
-   (on prometheus 38 KB and 50 KB, both under GitHub's 65,536-character
-   limit for a comment; `--markdown --full` was 285 KB). The header shows the manifest's commit as
-   `branch main @ 540ee5b5`.
+   only when the directory holds a plot). The header shows the manifest's
+   commit as `branch main @ 540ee5b5`.
+
+   **The Markdown export** (`--markdown PATH`) is the same report for a
+   reader who is not on the machine that made it: a pull-request comment,
+   a job summary. It opens with the tally (`**4 warnings, 10 notes** · 5 by
+   rules not measured for precision yet`), then one line saying which of
+   the two exports this is and how to get the other or one table whole
+   (`The default report: every finding, a table up to 50 rows ·
+   --markdown --full adds Secrets by rule, Dependencies by lock file and
+   Checks run · --section NAME --markdown prints one table whole`), then
+   the header's facts. Its headings are the terminal's section titles and
+   nothing else, the same words at either tier and each once, so a link to
+   `#hotspots` holds whichever export it points into; what qualifies a
+   title (`50 of 475, by complexity`) is the line under it, with the command
+   that prints the rest of a table the cap cut (`--section
+   complex-functions --markdown`). A finding is a list item: the severity
+   word and the title in bold, `(not measured yet)` for a rule nobody has
+   measured, and the rule's id as code; then the statement, the subjects
+   it names as a nested list, every one the statement lists and a last
+   item counting the rest, what it says after them, and each `Next step:`
+   on a line of its own. A caption is a paragraph a line. The Supply chain
+   section is a list, a row an item, placed where `--full` has it: before
+   the first section of its group. Without `--full` the export carries the
+   sections it always carried, not the three `--full` gained; with
+   `--full`, all of them under the same 50-row cap.
+
+   No text is lost to the renderer. What a reader would paste is a code
+   span and everything else has `\`, `` ` ``, `*`, `_`, `<` and `>` escaped
+   (and `|` in a table), so a nameless function prints as `<anonymous>`
+   where GitHub used to read an HTML tag and print nothing. A table says
+   which of its columns hold code (paths, functions, packages, versions,
+   advisory and control ids, secret rules) and those cells are spans
+   whole. In a finding, the subjects are the ones its own `evidence`
+   names: its paths, its packages, a version after its package's name,
+   after `fixed in` or after `to`, a function before its file, a commit
+   hash. Everywhere else (captions, the header, a prose cell such as the
+   watch list's `eval() nesting 6`, and a subject a statement names past
+   the ten its evidence holds) a word is a span when it has the shape of
+   one: a path that ends in a slash or whose last part has a dot, a file
+   name with an extension, a dot file, a call, a flag, an abbreviated
+   commit hash. A package or a version has no shape of its own (`2.9` is
+   a version and a mean), so outside a finding's evidence and a table's
+   column it is left as prose, escaped.
+
+   The export names no path outside the repository. It closes with the
+   steps line, the Run line and `gitmole DIR --no-run --markdown -` (`…
+   --full` in the full export) `writes this report again, DIR being the
+   run's output directory`; a file it points at (`secrets.json`,
+   `dependencies.json`, `hygiene.json`, a plot) is named as it is in that
+   directory. Until 0.44.0 its last line was `Full results in` and the
+   absolute path on the machine that ran it. On prometheus the two exports
+   are 41 KB and 53 KB (40,774 and 52,490 characters), both under GitHub's
+   65,536-character limit for a comment; `--markdown --full` was 285 KB
+   while it printed every row.
 
 A full example, at a pinned commit, is
 [docs/examples/react.md](https://github.com/antvinni/gitmole/blob/main/docs/examples/react.md).
@@ -1298,6 +1350,7 @@ directory for a remote target:
 | File | From | What it is |
 |---|---|---|
 | `meta.json` | git | name, branch, commit count, merge-commit count, date span and identities of the checked-out branch's history; every step's outcome under `steps`, its wall time under `step_seconds` and the peak memory of its largest process under `step_peak_mb` (the `--json` export moves these two into its `envelope`, since they vary between runs); what produced the run under `run` (the commit, gitmole's version, every tool's version under `tools`, the versions gitmole pins under `tools_pinned` and any tool that is not at its pinned one under `tools_moved`, and the options); the classifier's `coverage`, `credential_files`, `generated` and `vendored` lists, and `scripts`, the executables with an interpreter line that are source by shape, each with the file type its interpreter gives it (absent when there are none) |
+| `findings.json` | gitmole, last, on every run | the digest of the report, for a script or a CI artefact: `findings`, `watch`, `watch_backtest`, `osps` and `not_computed` as the `--json` export has them, row for row; `summary`, the header's numbers (the portfolio export's row for a repository: commits, dates, the count of identities, lines, files, languages, coverage); of `meta` only `steps` and `run` (what ran, gitmole's version, each tool's and the options); `hygiene` and `dependencies` with every list replaced by its length (`unpinned_count`, `vulnerable_count`), which keeps what each check looked at, what it found and the vulnerability database's date; and `secret_counts`, the secrets scan as counts (values, places at HEAD and only in history, those graded high, placeholders). It is the same bytes for the same commit and options: keys sorted, one line, no path of the machine, no seconds, no memory figure, no email address, and never a secret's value, hash, line or fingerprint. 44 KB on prometheus, where the `--json` export is 27 MB. `--no-run` reads a directory and writes nothing, so a directory from before 0.45.0 has none |
 | `gitmole-feedback.json` | you | written only when you answer the five questions (`--feedback`): each answer's rule id, severity, whether it was true and whether you would act on it, plus gitmole's version and three bands (main language, file count, commit count). Nothing else, and nothing is sent |
 | `activity.json` | change analysis | commits by weekday, hour and month; net lines per year; fix-commit count; per-author totals and monthly timeline; the sweeping commits left out of the tables, each marked whether `.git-blame-ignore-revs` declares it, the import commits left out with the history's total lines added, and how many declared commits the log holds; the oversized fixes left out of the fix counts, the tangled commits with a sample, and how many subjects end in a squash-merge suffix |
 | `size.json` | scc | lines per language, COCOMO estimate |
@@ -1307,6 +1360,7 @@ directory for a remote target:
 | `reverts.txt` | git | the commits whose message carries git revert's body line `This reverts commit <sha>`, each hash with its message body: the change analysis and the cohort count them as reverts whatever their subject says |
 | `log.txt` | git | the numstat log export the change analysis reads, whitespace ignored, with each commit's `Co-authored-by` trailers behind its subject |
 | `maat-revisions.csv` | change analysis | change frequency per file |
+| `maat-plumbing.csv` | change analysis | the files the change log shows to be release plumbing by behaviour: twenty commits or more, four in five of them swapping no more than three lines for as many. Written only when there is such a file, and the `--json` export has its `plumbing` key only then: until 0.44.0 every run wrote a header and every export an empty list |
 | `maat-coupling.csv` | change analysis | files that change together, over logical changes (a ticket's commits, or one author's day) |
 | `maat-soc.csv` | change analysis | sum of coupling per file: its co-changes with any other file, and how many files it often changes with, over logical changes |
 | `maat-tests.csv` | change analysis | per production file, how many logical changes touched it and how many of those also touched a test file |
@@ -1331,3 +1385,100 @@ directory for a remote target:
 | `structure.json` | structure step, Python 3.10 or newer | per file: language, lines, comments, TODO/FIXME/XXX/HACK markers with a sample, top-level definitions, the files it imports and which of those only after it loads (`deferred`) — resolved for Python (from a root), JavaScript and TypeScript (relative paths), C and C++ (quoted includes), Ruby (`require_relative`, and `require` of a tracked file) and Go (an import path against the `module` and relative `replace` lines of the go.mod files in the tree; a Go import names a package, so it is an edge to every file of that directory the build compiles into it, `_test.go` and `package main` aside), while Rust, Java, C# and PHP imports stay unresolved — its deepest nesting and highest cognitive complexity; the notable functions (nesting, cognitive complexity, complex conditions, bumps); how many imports resolved per language; the empty catch blocks, string-literal addresses and commented-out code lines per file; the possibly unreferenced files; or a status saying how to install it |
 | `provenance.json` | provenance step | trailer keys, co-authors who never author, sign-offs by them, the declared commits against the rest (with each side's watch-list hit rate; the JSON keeps the keys `cohort` and `marked`), the lines added, moved and churned within two weeks in the last year and the year before, the commit-shape descriptors, and the agent files (instructions and how far behind, guardrails, approval settings, personal settings tracked, MCP declarations with the keys of literal values, hook commands with their scripts, plugin manifests, skills) |
 | `run.log` | gitmole | every command run and its stderr |
+
+## Where each key and file is shown
+
+Every top-level key of the `--json` export and every file of the output
+directory has a home: a section of the report, with the tier that prints it
+(`default`, `--full`, or `--section NAME` only), or `export only` when no
+rendering prints it, or `retired` when gitmole no longer writes it. A test
+builds the list of keys from an export and the list of files from an output
+directory and fails when one has no row here, so a new key or file is given a
+home in the change that adds it. Nothing is retired today; the one removal
+is the `plumbing` key and its file when empty.
+
+A key some rule reads is `export only` when its rows are printed nowhere:
+the finding it leads to is in the Findings, the rows are not. A file whose
+content is a key has that key's home.
+
+| Key or file | Home |
+|---|---|
+| `activity` | People (default) · the header's `commits` and `left out` rows (default) · Activity (`--full`) · Timeline (`--full`) · export only: `by_hour` past the busiest hour, `tangled`, `oversized_fixes`, `squash_subjects`, `reverted` (the rules that read them are in the Findings) |
+| `age` | Hotspots (`--full`), its `idle` column · Surviving code by year (`--full`), when no blame pass ran |
+| `authors` | Hotspots (`--full`), its `authors` and `minors` columns · Watch list (`--full`), under each row |
+| `change_risk` | Change risk (default), with `--risk` |
+| `cohorts` | the header's `code` row (default) · Surviving code by year (`--full`) |
+| `companions` | `--section companions` only · Watch list (`--full`), under a row that has one |
+| `compare` | Since last report (default), with `--compare` |
+| `components` | export only: read by nothing since the component-coupling rule was retired at 0.39.0 |
+| `coupling` | Change coupling (default) |
+| `coverage` | the header's `files` and `code` rows (default) |
+| `dependencies` | Supply chain (default), its `dependencies` row · Dependencies by lock file (`--full`) |
+| `doa` | export only: read by the Truck factor rule |
+| `entropy` | `--section hotspots` only, in its `--csv` (`periods`, `hcm`) · Watch list (`--full`), under a row that changed in many months |
+| `envelope` | export only: what differs between two runs of one commit (paths, seconds, memory, the clone's unreachable objects) |
+| `findings` | Findings (default) |
+| `fix_history` | export only: read by the Bug magnets rule |
+| `fixes` | Watch list (default), its `fixes` column · Hotspots (`--full`) |
+| `functions` | Complex functions (default) |
+| `hygiene` | Supply chain (default), its `checked, ok` row: the checks that ran with something to check and found nothing, by name actions, updates, lock files, bidi and mixed-script, binaries, licence and declared files, as many as fit three lines · Checks run (`--full`), one row for each check, passed or not |
+| `latenight` | `--section hotspots` only, in its `--csv` (`late`) · Watch list (`--full`), under a row changed late at night |
+| `meta` | the header (default) · the closing lines (default), from `steps` · Checks run (`--full`), one row for each step · People (default), from `identities` |
+| `not_computed` | Findings (default), its last line |
+| `osps` | OSPS Baseline (`--full`) · the closing lines (default), as the one number of the list of sections |
+| `ownership` | Knowledge map (default) · Watch list (default), its `top author` column |
+| `plumbing` | export only, and only when it has a row: read by the file classifier, which hides release files from Hotspots and the Watch list |
+| `provenance` | Changed lines (`--full`) · Trailers (`--full`) · Agent surface (`--full`) |
+| `revisions` | Watch list (default) · Hotspots (`--full`) |
+| `secrets` | Supply chain (default), its `secrets` row, as counts · Secrets by rule (`--full`); never a value |
+| `secrets_scanned` | Supply chain (default): `not scanned` in the verdict's place |
+| `signing` | Supply chain (default), its `signing` row · Signing by year (`--full`) · export only: `by_identity` |
+| `size` | the header (default) · Size by language (`--full`) · Hotspots (`--full`), its `lines` column |
+| `soc` | Hotspots (`--full`), its `co-changes` column · Watch list (`--full`), under a row with many partners |
+| `structure` | Checks run (`--full`): `resolved`, the share of imports that resolve to a tracked file, one row naming each language · Watch list (default), its `look at first` column · export only: the per-file rows, which the structure rules read |
+| `surviving_by_identity` | People (default), its `surviving` column |
+| `tests` | `--section hotspots` only, in its `--csv` (`n-sets`, `with-tests`) · Watch list (`--full`), under a row whose changes rarely came with a test |
+| `theseus_authors` | People (default), its `surviving` column: the total the shares are of · export only: the per-author rows, which the ownership rules read |
+| `tools` | People (default), in its caption |
+| `trend` | Hotspots (`--full`), its `trend` column · Watch list (`--full`), under a row that grew |
+| `watch` | Watch list (default) |
+| `watch_backtest` | Watch list (default), the caption's `Check:` |
+| `watch_by_component` | Watch list by component (`--full`) |
+| `activity.json` | the `activity` key |
+| `backtest/` | the `watch_backtest` key |
+| `code-age.png` | export only: a plot, with `--plots`; the closing lines name it |
+| `dependencies.json` | the `dependencies` key |
+| `findings.json` | the `findings` key: the digest of Findings, Watch list and Supply chain, written out |
+| `functions.csv` | the `functions` key |
+| `gitmole-feedback.json` | export only: your answers to `--feedback` |
+| `hygiene.json` | the `hygiene` key |
+| `log.txt` | export only: the log the change analysis reads |
+| `maat-age.csv` | the `age` key |
+| `maat-arrivals.csv` | export only: read by the Truck factor rule, whose evidence carries the result as `new_since` |
+| `maat-authors.csv` | the `authors` key |
+| `maat-companions.csv` | the `companions` key |
+| `maat-components.csv` | the `components` key |
+| `maat-coupling.csv` | the `coupling` key |
+| `maat-doa.csv` | the `doa` key |
+| `maat-entity-ownership.csv` | the `ownership` key |
+| `maat-entropy.csv` | the `entropy` key |
+| `maat-fixes.csv` | the `fixes` key |
+| `maat-latenight.csv` | the `latenight` key |
+| `maat-plumbing.csv` | the `plumbing` key |
+| `maat-revisions.csv` | the `revisions` key |
+| `maat-soc.csv` | the `soc` key |
+| `maat-tests.csv` | the `tests` key |
+| `meta.json` | the `meta` key |
+| `packages.json` | export only: read by `--sbom` |
+| `provenance.json` | the `provenance` key |
+| `reverts.txt` | export only: read by the change analysis, which counts them in `activity` |
+| `run.log` | export only: every command run and its stderr |
+| `secrets.json` | the `secrets` key |
+| `signing.json` | the `signing` key |
+| `size.json` | the `size` key |
+| `structure.json` | the `structure` key |
+| `survival.png` | export only: a plot, with `--plots`; the closing lines name it |
+| `theseus/` | the `cohorts` key |
+| `tree.txt` | export only: the tracked paths at HEAD, which the file classifier reads |
+| `trend.json` | the `trend` key |
+| `unreachable.json` | Supply chain (`--full`), its `secrets` row, as a count; in the export under `envelope` |

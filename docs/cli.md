@@ -72,7 +72,7 @@ What is printed, and what is written beside it.
 | `--section NAME` | Print one section of the report whole, and nothing else: every row, with no cap and nothing hidden. Repeatable. Works with `--no-run`, and with `--markdown`, which then holds the named sections only. See [One section, whole](#one-section-whole) for the names. |
 | `--csv` | With one `--section NAME`: write that section's rows to stdout as a CSV with a header line, holding every field the JSON export has for a row, and no email address. |
 | `--json PATH` | Write every table, the watch list and the findings as JSON to PATH, or `-` for stdout. |
-| `--markdown PATH` | Write the report as Markdown to PATH, or `-` for stdout. |
+| `--markdown PATH` | Write the report as Markdown to PATH, or `-` for stdout: the tally, a line saying which tier this is, the findings as a list and the sections under the terminal's titles, up to 50 rows a table. Paths, functions, packages, versions and hashes are code spans, everything else is escaped, and nothing in it names the output directory's path. With `--full`, `--full`'s sections. See [Reading the output](output.md). |
 | `--sarif PATH` | Write the findings as SARIF 2.1.0 to PATH, or `-` for stdout, for GitHub code scanning and GitLab. See [SARIF](#sarif). |
 | `--sarif-scope SCOPE` | With `--sarif`, `head` or `history`: `head` (the default) keeps only the results whose file is in the tree; `history` keeps every result, the commit in its properties. |
 | `--sbom PATH` | Write a CycloneDX 1.6 SBOM of every locked package to PATH, or `-` for stdout. See [SBOM](#sbom). |
@@ -222,6 +222,15 @@ parsing its sentence:
  "rule": {"id": "bug_magnets", "min_recent": 3, "warn_at": 5, "window_months": 6, "fix": "the commit subject says so"},
  "evidence": {"count": 2, "files": [{"file": "lib/url.c", "recent_fixes": 5, "fixes": 41}]}}
 ```
+
+A run also writes `findings.json` into its output directory, whether or not
+`--json` is given: the findings, the watch list with its check, the OSPS
+result, the header's numbers, what each hygiene check and each scan counted,
+the tools and the steps, in about a six-hundredth of the export's bytes
+(44 KB against 27 MB on prometheus) and with nothing in it that is the
+machine's or a secret's. It is the file to upload from a CI job or read
+from a script; the export is every table. See
+[The output directory](output.md#the-output-directory).
 
 The same commit with the same options gives the same bytes. The export is
 written with its keys sorted, rows come back in one order whatever order a
