@@ -68,9 +68,11 @@ What is printed, and what is written beside it.
 
 | Option | What it does |
 |---|---|
-| `--full` | A report option, not a help option: print the report with every section, column and row. Adds the hotspots, size, activity and code age tables; the default report keeps the columns you read, caps each table, elides long paths in the middle, hides test files, deleted files and vendored code, shows a directory that changes as one as a single coupling row, prints each finding in its short form (the count, the rule's numbers, the worst subject, one step) where `--full` names every subject, and names in one line the findings labelled true but never acted on. With `--clean`, it lists each temp clone rather than one row for them all. |
+| `--full` | A report option, not a help option: print the report with every section and every finding. It is not every row: a table stops at 50 rows, hides what the default hides (test files, deleted files, vendored and generated code) and says in its title how many rows there are and which `--section NAME` prints them all (`People · 50 of 1,324 identities, by commits · --section people`). Each finding is laid out with the subjects its statement names a line each; the header closes with a `contents` row; the columns the default leaves out are back; and the sections only `--full` prints are added in their groups: Watch list by component, Hotspots, Size by language, Timeline, Activity, Surviving code by year, Changed lines, Trailers, and after the Supply chain section Secrets by rule, Dependencies by lock file, Signing by year, Checks run, Agent surface and the OSPS Baseline. `--markdown --full` takes the same cap. Until 0.44.0 `--full` printed every row (4,359 lines at 80 columns on prometheus, 964 now); a script that piped it for the rows wants `--section NAME --csv`. With `--clean`, it lists each temp clone rather than one row for them all. |
+| `--section NAME` | Print one section of the report whole, and nothing else: every row, with no cap and nothing hidden. Repeatable. Works with `--no-run`, and with `--markdown`, which then holds the named sections only. See [One section, whole](#one-section-whole) for the names. |
+| `--csv` | With one `--section NAME`: write that section's rows to stdout as a CSV with a header line, holding every field the JSON export has for a row, and no email address. |
 | `--json PATH` | Write every table, the watch list and the findings as JSON to PATH, or `-` for stdout. |
-| `--markdown PATH` | Write the report as Markdown to PATH, or `-` for stdout. |
+| `--markdown PATH` | Write the report as Markdown to PATH, or `-` for stdout: the tally, a line saying which tier this is, the findings as a list and the sections under the terminal's titles, up to 50 rows a table. Paths, functions, packages, versions and hashes are code spans, everything else is escaped, and nothing in it names the output directory's path. With `--full`, `--full`'s sections. See [Reading the output](output.md). |
 | `--sarif PATH` | Write the findings as SARIF 2.1.0 to PATH, or `-` for stdout, for GitHub code scanning and GitLab. See [SARIF](#sarif). |
 | `--sarif-scope SCOPE` | With `--sarif`, `head` or `history`: `head` (the default) keeps only the results whose file is in the tree; `history` keeps every result, the commit in its properties. |
 | `--sbom PATH` | Write a CycloneDX 1.6 SBOM of every locked package to PATH, or `-` for stdout. See [SBOM](#sbom). |
@@ -104,6 +106,69 @@ Checking and installing the tools, looking before a run, and tidying up after on
 | `--yes` | With `--clean`: delete without asking. For scripts and pipes. |
 | `--version` | Print gitmole's version and exit. |
 | `-h`, `--help` | Print the options in these groups, one line each, with examples, and exit. `--help --full` prints the same: `--full` is a report option. |
+
+## One section, whole
+
+`--section NAME` prints one section of the report on its own: no header, no findings, no closing lines.
+The table has every row it can have, in the table's own ranking, the rows the default report shows first
+and the ones it hides after them; `--full` stops a table at 50 rows, and this is where the rest are. Where the rows are files a `kind` column says what each is, in the file
+classifier's word: `source`, `test`, `generated`, `vendored`, `example`, `release`, `other` (a file type
+that is not ranked) or `removed` (no longer in the tree). A coupled pair's kind is the class the Change
+coupling table hides it under (`header` and `locale` besides those), `source` for a pair it shows.
+
+```bash
+gitmole analysis-repo --no-run --section hotspots            # every file the history changed
+gitmole analysis-repo --no-run --section people --csv > people.csv
+gitmole . --section complex-functions --section change-coupling --markdown tables.md
+```
+
+A name is the section's title in lower case with a hyphen for each space. The title itself is taken too,
+in any case (`--section "Complex functions"`), and `watch` is short for `watch-list`. `--help` lists the
+names, and an unknown one prints the list and exits 2 before anything runs:
+
+| Name | What it prints |
+|---|---|
+| `findings` | every finding in the long form `--full` prints: the fact, the subjects its statement names a line each, the step |
+| `watch-list` | the watch list's fifteen files, each with the reasons the default report's columns do not hold on a line under it |
+| `most-changed-documents` | the documents the history changed most, where documentation is most of the tree |
+| `watch-list-by-component`, `size-by-language`, `activity`, `surviving-code-by-year`, `changed-lines`, `trailers`, `signing-by-year`, `checks-run`, `agent-surface`, `osps-baseline` | the table `--full` prints under that title |
+| `secrets-by-rule` | what the secrets scan found, by its rule and the confidence it gave: places at HEAD, places only in history, the first file. Never a value |
+| `dependencies-by-lock-file` | every vulnerable package with the lock file that pins it, in the order the findings rank them |
+| `hotspots` | every file the history changed, by changes × lines of code, with its kind |
+| `complex-functions` | every function at complexity 10 or more, with the kind of its file |
+| `change-coupling` | every pair with five or more shared changes, with its kind; no directory rows |
+| `knowledge-map` | every area the history knows, those no longer in the tree too |
+| `people` | every identity, with no floor of commits |
+| `timeline` | every identity with a commit in the twelve months |
+| `companions` | the directed pairs `--hook` and `--risk` read (`maat-companions.csv`): when the file changes, its companion changes with it in this share of the file's changes. No report prints them |
+
+`--csv` writes the same rows, in the same order, to stdout with a header line, and everything else a run
+prints goes to stderr. Counts carry no thousands separator and a bar column is left out. Hotspots holds
+every per-file number of the export under the export's own keys (`n-fixes`, `n-authors`, `minor`, `soc`,
+`partners`, `age-months`, `n-sets`, `with-tests`, `late`, `periods`, `hcm`, and the trend); Complex
+functions lizard's record of each function; `watch-list` the export's `watch` rows with the reasons in
+one cell; `people` each identity's commits, merges, co-authored commits, shares, surviving lines, lines
+added and deleted, first and last commit and how many aliases were merged into it. No CSV holds an email
+address: `people` has no such column, and a name that is itself an address is cut at its `@` (as it is
+in the People table of every rendering).
+
+Nothing is written to the output directory: an ordinary run leaves the files it always left, and a
+section is made from them on request.
+
+`--section` with other options:
+
+| With | What happens |
+|---|---|
+| `--full` | refused (exit 2): a section is whole already |
+| `--csv` | one `--section` only, and not with `--markdown` |
+| `--markdown PATH` | the named sections as Markdown, to PATH or stdout |
+| `--json PATH`, `--sarif PATH`, `--sbom PATH` | written as always, the whole export: a section does not narrow them. To stdout (`-`) they are refused, since the section is there |
+| `--fail-on`, `--baseline`, `--risk-threshold`, `--require-vuln-db` | unchanged: a gate reads the findings, not what is printed |
+| `--risk`, `--compare` | computed for the gate and the JSON; their sections are not printed |
+| `--hook`, `owner/*` | refused (exit 2) |
+
+A step that did not finish is said on one last line (`not complete: size timed out`; on stderr with
+`--csv`), so rows that are missing do not read as rows that are not there.
 
 ## One part of a repository
 
@@ -157,6 +222,15 @@ parsing its sentence:
  "rule": {"id": "bug_magnets", "min_recent": 3, "warn_at": 5, "window_months": 6, "fix": "the commit subject says so"},
  "evidence": {"count": 2, "files": [{"file": "lib/url.c", "recent_fixes": 5, "fixes": 41}]}}
 ```
+
+A run also writes `findings.json` into its output directory, whether or not
+`--json` is given: the findings, the watch list with its check, the OSPS
+result, the header's numbers, what each hygiene check and each scan counted,
+the tools and the steps, in about a six-hundredth of the export's bytes
+(44 KB against 27 MB on prometheus) and with nothing in it that is the
+machine's or a secret's. It is the file to upload from a CI job or read
+from a script; the export is every table. See
+[The output directory](output.md#the-output-directory).
 
 The same commit with the same options gives the same bytes. The export is
 written with its keys sorted, rows come back in one order whatever order a

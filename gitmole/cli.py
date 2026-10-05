@@ -18,7 +18,7 @@ from rich.live import Live
 from rich.spinner import Spinner
 from rich.text import Text
 
-from . import __version__, banner, blame, filetypes, findings, load, loss, run, scope, textfmt, tools
+from . import __version__, banner, blame, filetypes, findings, load, loss, run, scope, section, textfmt, tools
 
 INSTALL_URL = "https://github.com/antvinni/gitmole/blob/main/docs/install.md"
 # what to do about a missing or moved required tool, said by a run and by --doctor alike
@@ -31,8 +31,10 @@ EPILOG = f"""\
 examples:
   gitmole .                            the clone you are in
   gitmole owner/repo                   clone into a temp dir, then report
-  gitmole . --full                     every section, row and column
+  gitmole . --full                     every section and every finding
   gitmole . --markdown report.md       the report as a Markdown document
+  gitmole analysis-repo --no-run --section people --csv
+                                       every row of one table, as CSV
   gitmole . --fail-on warning          exit 3 on a warning or worse
   gitmole . --risk main --risk-threshold 10
                                        exit 3 if the change since main is risky
@@ -40,6 +42,9 @@ examples:
                                        re-render an earlier run as JSON
   gitmole --install-tools              download the three pinned tools
   gitmole --doctor                     check the tools against their pins
+
+section names, for --section NAME:
+{section.names_text()}
 
 every option in detail:
   {DOCS_URL}/cli.md
@@ -82,7 +87,9 @@ def build_parser() -> argparse.ArgumentParser:
     scope.add_argument("--ignore", action="append", default=[], metavar="GLOB", help="another pattern to leave out (repeatable)")
 
     report = p.add_argument_group("report and exports")
-    report.add_argument("--full", action="store_true", help="print the report with every section, row and column")
+    report.add_argument("--full", action="store_true", help="every section and finding; --section NAME for each row")
+    report.add_argument("--section", action="append", default=[], metavar="NAME", help="print one section whole (repeatable); names below")
+    report.add_argument("--csv", action="store_true", help="with --section: its rows as CSV on stdout")
     report.add_argument("--json", metavar="PATH", help="write report and findings as JSON (- for stdout)")
     report.add_argument("--markdown", metavar="PATH", help="write the report as Markdown (- for stdout)")
     report.add_argument("--sarif", metavar="PATH", help="write the findings as SARIF 2.1.0 (- for stdout)")
@@ -176,7 +183,7 @@ def main(argv=None, console: Console = None, tool_check=run.missing_tools, plann
     if args.clean:
         return _clean(args, console, ask)
     # When an export goes to stdout, everything else (banner, progress, report) moves to stderr.
-    quiet = "-" in (args.json, args.markdown, args.sarif, args.sbom)
+    quiet = "-" in (args.json, args.markdown, args.sarif, args.sbom) or args.csv   # --csv is one section's rows on stdout
     ui = render.carry(Console(stderr=True, highlight=False)) if quiet else console
 
     rc, now = _resolve_time(args, err, ui)
@@ -225,7 +232,7 @@ def main(argv=None, console: Console = None, tool_check=run.missing_tools, plann
     finally:
         if kind == "remote":
             shutil.rmtree(os.path.dirname(repo_dir), ignore_errors=True)   # the temp clone; nothing reads it after the run
-    return _render(out_dir, console, ui, args, err)
+    return _render(out_dir, console, ui, args, err, ran=True)
 
 
 def _check_args(args, err, kind=None) -> int | None:
@@ -254,7 +261,8 @@ def _check_args(args, err, kind=None) -> int | None:
                "--compare: no such file: " + args.compare if args.compare and not os.path.isfile(args.compare) else
                "--path needs a run: a re-render cannot narrow an earlier analysis" if args.path and args.no_run else
                "--plots cannot be narrowed by --path: git-of-theseus reads the whole tree" if args.path and args.plots else
-               "--baseline: no such file: " + args.baseline if args.baseline and not os.path.isfile(args.baseline) else None)
+               "--baseline: no such file: " + args.baseline if args.baseline and not os.path.isfile(args.baseline) else
+               section.check(args))
         if not bad and args.path:
             try:
                 args.path = scope.clean(args.path)
@@ -267,10 +275,14 @@ def _check_args(args, err, kind=None) -> int | None:
                "--baseline needs one repository, not owner/*" if args.baseline and kind == "org" else
                "--sbom needs one repository, not owner/*" if args.sbom and kind == "org" else
                "--path needs one repository, not owner/*" if args.path and kind == "org" else
+               "--section needs one repository, not owner/*" if args.section and kind == "org" else
                "--risk needs a local path" if args.risk else
                "--list-file-types needs a local path" if args.list_file_types else None)
     if bad:
-        err.print(f"[red]{bad}[/red]")
+        first, _, rest = bad.partition("\n")   # the reason in red; a list under it (the section names) as it is
+        err.print(Text(first, style="red"))
+        if rest:
+            err.print(Text(rest))
         return 2
     return None
 
@@ -334,7 +346,7 @@ def _no_run(args, console, ui, err, stdin=None) -> int:
         return 2
     if args.hook:
         return _hook(out_dir, args, console, err, sys.stdin if stdin is None else stdin)
-    if ui.is_terminal:
+    if ui.is_terminal and not args.section:   # a section on its own is that section and nothing else
         ui.print(banner.neon(version=__version__))
     return _render(out_dir, console, ui, args, err)
 
@@ -764,7 +776,9 @@ def _portfolio(owner: str, args, console: Console, ui: Console, planner, estimat
             except load.Unreadable as e:
                 ui.print(f"[yellow]{name}:[/yellow] {e}; skipped", soft_wrap=True)
                 continue
-            reports.append((name, report, findings.evaluate(report)))
+            found = findings.evaluate(report)
+            _digest(out_dir, report, found, ui)
+            reports.append((name, report, found))
     finally:
         shutil.rmtree(parent, ignore_errors=True)   # the temp clones; nothing reads them after the run
 
@@ -846,7 +860,21 @@ def _write(text: str, target: str, console: Console) -> None:
             fh.write(text)
 
 
-def _render(out_dir: str, console: Console, ui: Console, args, err: Console) -> int:
+def _digest(out_dir: str, report: dict, found: list, err: Console) -> None:
+    """Write findings.json beside the files the steps wrote: a run's last file, from the report as it was just
+    read back. A directory that cannot be written to costs the file, not the report."""
+    from . import digest
+    try:
+        digest.write(out_dir, report, found)
+    except OSError as e:
+        err.print(f"[yellow]{digest.FILE} not written:[/yellow] {e}", soft_wrap=True)
+
+
+def _render(out_dir: str, console: Console, ui: Console, args, err: Console, ran: bool = False) -> int:
+    """Read the output directory back and print or export the report. `ran` says a run has just filled the
+    directory: only then is findings.json written, as every other file there is a run's. --no-run reads a
+    directory and writes nothing into it, so a re-render by a newer gitmole never leaves a file that
+    disagrees with the meta.json beside it about which version found what."""
     from . import render
 
     try:
@@ -855,6 +883,8 @@ def _render(out_dir: str, console: Console, ui: Console, args, err: Console) -> 
         err.print(f"[red]{e}[/red]", soft_wrap=True)
         return 2
     found = findings.evaluate(report)
+    if ran:
+        _digest(out_dir, report, found, err)
     risk = None
     if args.risk:
         try:
@@ -887,7 +917,9 @@ def _render(out_dir: str, console: Console, ui: Console, args, err: Console) -> 
     if args.json:
         _write(render.dumps_json(report, found, risk=risk, compare=comparison), args.json, console)
     if args.markdown:
-        _write(render.markdown(report, found, full=args.full, risk=risk, base=args.risk, compare=comparison), args.markdown, console)
+        text = (section.markdown(report, found, args.section) if args.section   # the named sections whole, and nothing else
+                else render.markdown(report, found, full=args.full, risk=risk, base=args.risk, compare=comparison))
+        _write(text, args.markdown, console)
     if args.sarif:
         from . import sarif
         _write(sarif.dumps(report, found, scope=args.sarif_scope), args.sarif, console)
@@ -899,9 +931,19 @@ def _render(out_dir: str, console: Console, ui: Console, args, err: Console) -> 
                       f"(dependencies: {(report.get('dependencies') or {}).get('status', 'not-run')}; run.log says why)", soft_wrap=True)
             return 2
         _write(sbom.dumps(report, packages), args.sbom, console)
-    if "-" not in (args.json, args.markdown, args.sarif, args.sbom):
+    if args.csv:
+        _write(section.csv_text(report, found, args.section[0]), "-", console)
+        left = section._unfinished(report)
+        if left:   # on stderr: the CSV is rows and nothing else
+            err.print(Text(left), soft_wrap=True)
+    elif "-" in (args.json, args.markdown, args.sarif, args.sbom):
+        pass   # the export is what stdout carries
+    elif args.section:
+        section.show(report, found, console, args.section)
+    else:
         render.report(report, found, console, full=args.full, risk=risk, base=args.risk, compare=comparison)
-    _feedback(report, found, args, console, err)
+    if not args.section:   # the questions are about the findings a report spelled out
+        _feedback(report, found, args, console, err)
     if args.baseline and args.fail_on:
         from . import gate
         known = [f for f in found if f.get("baseline") == "in the baseline" and gate.tripped([f], args.fail_on)]
