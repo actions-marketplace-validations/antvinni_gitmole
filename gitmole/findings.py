@@ -1090,14 +1090,54 @@ def _files_list(items: list, n: int = 3) -> str:
 def hygiene_findings(report: dict) -> list:
     """The hygiene checks (hygiene.py), one finding per rule, each naming the OpenSSF Scorecard check it
     stands in for without the GitHub API. Nothing for an output directory from before the step."""
-    h = report.get("hygiene") or {}
-    swept = [c["hash"] for c in (report.get("activity") or {}).get("sweeping") or [] if c.get("hash")]
-    if swept and (h.get("lockfiles") or {}).get("drift"):
-        h = {**h, "lockfiles": _drift_past_sweeps(h["lockfiles"], swept)}
+    h = _swept_hygiene(report)
     out = []
     for check in (_hygiene_actions, _hygiene_pwn_request, _hygiene_injection, _hygiene_lockfiles, _hygiene_updates, _hygiene_presence, _hygiene_confusion, _hygiene_install, _hygiene_binaries, _hygiene_submodules, _hygiene_symlinks, _hygiene_trojan,
                   _hygiene_unused, _hygiene_licence, _hygiene_copyleft):
         check(h, out)
+    return out
+
+
+def _swept_hygiene(report: dict) -> dict:
+    """The hygiene record with the lock file drift that only sweeping commits explain left out (_drift_past_sweeps)."""
+    h = report.get("hygiene") or {}
+    swept = [c["hash"] for c in (report.get("activity") or {}).get("sweeping") or [] if c.get("hash")]
+    if swept and (h.get("lockfiles") or {}).get("drift"):
+        h = {**h, "lockfiles": _drift_past_sweeps(h["lockfiles"], swept)}
+    return h
+
+
+def drift_rows(report: dict) -> list:
+    """The drift rows lockfile_drift names, every one the hygiene step kept: what --baseline compares (gate.py)
+    and where SARIF places the finding."""
+    return (_swept_hygiene(report).get("lockfiles") or {}).get("drift") or []
+
+
+def lockfile_drift(report: dict) -> list:
+    """The lockfile_drift finding alone, which --baseline runs again over the manifests its baseline lacked."""
+    out = []
+    _hygiene_lockfiles(_swept_hygiene(report), out)
+    return [f for f in out if f["rule"]["id"] == "lockfile_drift"]
+
+
+def trojan_source(report: dict) -> list:
+    """The trojan_source finding alone, which --baseline runs again over the characters and tokens its baseline lacked."""
+    out = []
+    _hygiene_trojan(report.get("hygiene") or {}, out)
+    return out
+
+
+def trojan_identities(rows: dict) -> list:
+    """[(identity, row)] for a trojan record's rows ({"bidi": [...], "mixed_script": [...]}, the hygiene step's or a
+    finding's evidence): a row is its file, its character or token, and which occurrence of that one in that file it
+    is, in file order - never its line, so an edit above it moves nothing. What --baseline compares (gate.py) and
+    what a SARIF result's fingerprint keys on, so the gate and code scanning agree on which row is new."""
+    out, seen = [], {}
+    for kind, what in (("bidi", "char"), ("mixed_script", "token")):
+        for r in rows.get(kind) or []:
+            key = (kind, r.get("file"), r.get(what))
+            seen[key] = seen.get(key, 0) + 1
+            out.append((key + (seen[key],), r))
     return out
 
 
@@ -1863,6 +1903,38 @@ TRUCK_FACTOR_MEASURED = "exact on 71.4% of 35 systems, 30% of those at truck fac
 
 TRUCK_MIN_FILES = 20   # under this many source files a truck factor is a statement about a handful of files
 
+# How an area is dated: the run's own --gone window, so "new" means what "gone" means, measured from the last commit.
+AREA_AGE_RULE = {"new_months": "the run's --gone months before the last commit",
+                 "renamed": "no age when any of the area's files arrived by a rename (git -M, single hop); "
+                            "a move below -M's similarity reads as an added file, and a rename inside a new area "
+                            "(a.ts to b.ts within it) withholds its age too, since the old path is not kept"}
+
+
+def new_areas(report: dict, areas: dict) -> dict:
+    """{area: "YYYY-MM"} for the areas (area -> its files) whose first commit is inside the run's --gone window
+    before the last commit and none of whose files arrived by a rename: a directory that is new, not one that
+    moved. An area with a file the change analysis did not date (an output directory from before 0.45 has no
+    arrivals) gets no age, nor does a shallow clone, whose history starts at the graft, nor any area of a
+    repository whose whole history is inside the window: there every area is as new as the repository, and the
+    window cannot tell one from the rest. Silence is the safe side: an area left undated reads as it always did."""
+    meta = report.get("meta") or {}
+    if meta.get("shallow"):
+        return {}
+    cut = loss.cutoff(report, meta.get("gone_months") or loss.DEFAULT_MONTHS)
+    rows = {r["entity"]: r for r in report.get("arrivals") or [] if r.get("first")}
+    began = meta.get("first_date_all") or meta.get("first_date")   # the whole history's, --since or not
+    if not cut or not rows or not began or began >= cut:
+        return {}
+    out = {}
+    for area, fs in areas.items():
+        dated = [rows.get(f) for f in fs]
+        if not fs or any(r is None for r in dated) or any(r.get("renamed") for r in dated):
+            continue
+        first = min(r["first"] for r in dated)
+        if first >= cut:
+            out[area] = first[:7]
+    return out
+
 
 def truck_factor_absent(report: dict, min_files: int = TRUCK_MIN_FILES):
     """Why truck_factor() has nothing to say when that is not "nobody is a risk": too few source files, or a
@@ -1934,6 +2006,7 @@ def truck_factor(report: dict, min_files: int = TRUCK_MIN_FILES, area_files: int
     lone.sort(key=lambda t: (-t[3], t[0]))
     if tf > 2 and not lone:
         return []
+    young = new_areas(report, {a: areas[a] for a, _, _, _ in lone})   # a new area's single author has not had the time to spread it
     orphans = round(share * len(files))
     gone = _gone(report)
 
@@ -1961,7 +2034,8 @@ def truck_factor(report: dict, min_files: int = TRUCK_MIN_FILES, area_files: int
     elif tf_d != tf:
         statement += f" With knowledge halving every five months it is {tf_d} ({names(removed_d)})."
     if lone:
-        statement += " Areas with a truck factor of one: " + ", ".join(f"{a} ({_who(w, gone)})" for a, w, _, _ in lone[:5]) + (f" and {len(lone) - 5} more" if len(lone) > 5 else "") + "."
+        statement += " Areas with a truck factor of one: " + ", ".join(
+            f"{a} ({_who(w, gone)}{f', new since {young[a]}' if a in young else ''})" for a, w, _, _ in lone[:5]) + (f" and {len(lone) - 5} more" if len(lone) > 5 else "") + "."
     if shares and top != removed[0] and level > 1:   # no one name to give: the first in the table would be an accident of its order
         statement += f" The surviving code's largest share, {_pct(lines, whole)}, is held by {level} people equally, which the bus-factor finding reads."
     elif shares and top != removed[0]:
@@ -1980,7 +2054,8 @@ def truck_factor(report: dict, min_files: int = TRUCK_MIN_FILES, area_files: int
         shared = sum(1 for n in counts.values() if n == counts[ask]) if counts else 0
         if shared > 1:
             ask = None   # several author equally many files: the first by name is no more the one to pair with than the rest
-    first_area = next((a for a, w, _, _ in lone if w == ask), None)   # lone is ordered by files at stake
+    # lone is ordered by files at stake; a new area is not where to start, its author is still the only one by its age
+    first_area = next((a for a, w, _, _ in lone if w == ask and a not in young), None)
     if ask is None and shared > 1:
         advice = (f"Those named are gone, and the {shared} people still here who author the most files author equally many; "
                   "give the files owners, starting with the ones changed most.")
@@ -1993,10 +2068,11 @@ def truck_factor(report: dict, min_files: int = TRUCK_MIN_FILES, area_files: int
         advice = f"Pair someone with {ask}" + (f" on {first_area}" if first_area else "") + f" first; {why}."
     return [_f("warning" if tf == 1 else "info", "Truck factor", statement, advice,
                rule={"id": "truck_factor", "doa_author_share": 0.75, "doa_floor": 3.293, "orphan_share": 0.5, "decay_months": 5,
-                     "ref": "Avelino et al., ICPC 2016", "measured": TRUCK_FACTOR_MEASURED},
+                     "ref": "Avelino et al., ICPC 2016", "measured": TRUCK_FACTOR_MEASURED, "area_age": AREA_AGE_RULE},
                evidence={"truck_factor": tf, "removed": removed, "truck_factor_decayed": tf_d, "removed_decayed": removed_d,
                          "files": len(files), "orphaned": orphans, "area_authors": sorted({w for _, w, _, _ in lone}),
-                         "areas": [{"area": a, "author": w, "files": n, "orphaned": o} for a, w, n, o in lone[:10]]})]
+                         "areas": [{"area": a, "author": w, "files": n, "orphaned": o, **({"new_since": young[a]} if a in young else {})}
+                                   for a, w, n, o in lone[:10]]})]
 
 
 RULES = [dormant, secrets_found, credential_files, vulnerable_dependencies, placeholder_identity, bus_factor, bug_magnets,
@@ -2071,7 +2147,7 @@ def one_owner(found: list, gone: set) -> list:
         else:
             statement = said
         advice = lead["advice"]
-        mine = [a for a in (truck["evidence"]["areas"] if truck else []) if a["author"] == who]
+        mine = [a for a in (truck["evidence"]["areas"] if truck else []) if a["author"] == who and not a.get("new_since")]
         if truck and mine and who not in gone:
             a = mine[0]   # ordered by files at stake
             advice = f"Pair someone with {who} on {a['area']} first; {a['orphaned']} of its {a['files']} files would have no author left without them."
