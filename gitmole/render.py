@@ -1038,7 +1038,8 @@ def knowledge_section(report: dict, full: bool = True, width=None) -> dict:
     gone = {g["name"] for g in loss.gone(report, months)}
     rows_all = report.get("ownership") or []   # every area the map showed before, tests included
     base = scope.report_base(report)   # a --path run's areas are the directories below the ones it names
-    areas = loss.areas(rows_all, gone, base)
+    dated = bool(report["meta"].get("ownership_recent")) and full is True   # the change analysis counted `recent` (0.45 on)
+    areas = loss.areas(rows_all, gone, base, dated)
     hidden_note = None
     tree = (report.get("size") or {}).get("files") or {}
     # the two views count different files, and tests/ at 9,568 lines here and 10,765 there read as a
@@ -1049,7 +1050,7 @@ def knowledge_section(report: dict, full: bool = True, width=None) -> dict:
     if full is not True and tree:
         # a directory the history knows but HEAD does not is a layout that no longer exists; the rows are
         # filtered before the areas are built so a vanished layout cannot hide that one directory now dominates
-        areas = [a for a in loss.areas(knowledge.present_rows(rows_all, tree), gone, base) if knowledge.in_tree(a["area"], tree, base)]
+        areas = [a for a in loss.areas(knowledge.present_rows(rows_all, tree), gone, base, dated) if knowledge.in_tree(a["area"], tree, base)]
         hidden = sum(1 for top in {knowledge.top_area(r["entity"], base) for r in rows_all} if not knowledge.in_tree(top, tree, base))
         hidden_note = f"{hidden} historical area{'s' if hidden != 1 else ''} hidden{HIDDEN_SUFFIX}" if hidden else None
     limit = _limit("Knowledge map", full)
@@ -1059,13 +1060,18 @@ def knowledge_section(report: dict, full: bool = True, width=None) -> dict:
     if full is not True and tree:
         assisted = {e: n for e, n in assisted.items() if e in tree}
     rows, shares, outrank = [], [], False
+    # how many of an area's authors committed to it in the --gone window, as "recent/all" in the authors cell: a
+    # count with no names, from the change analysis of 0.45 on (meta's ownership_recent); an output directory from before has no such count,
+    # and its --full map is the one it always was. In the cell, not a column of its own, so the owners keep their width
+    recent = dated
     for a in areas[:limit]:
         owners = _owner_cells(a, gone)
         lost = f"{100 * a['lost_share']:.0f}%" if a["lines"] else "-"
         theirs = sum(n for e, n in assisted.items() if knowledge.in_area(e, a["area"], base))
         shares.append(round(100 * theirs / (a["lines"] + theirs)) if a["lines"] + theirs else 0)
         outrank = outrank or (theirs > 0 and theirs >= (a["owners"][1][1] if len(a["owners"]) > 1 else 0))
-        rows.append((a["area"], f"{a['lines']:,}", a["authors"], lost if gone else "-", owners[0], owners[1], f"{shares[-1]}%"))
+        authors = f"{a.get('recent', 0)}/{a['authors']}" if recent else a["authors"]
+        rows.append((a["area"], f"{a['lines']:,}", authors, lost if gone else "-", owners[0], owners[1], f"{shares[-1]}%"))
     columns = [("area", PATH), ("lines added", RIGHT), ("authors", RIGHT), ("lost", RIGHT), ("main owner", {}), ("second", {}), ("agents", RIGHT)]
     # a column only when a row shown has a whole percent of it; in the default report only when the tools
     # together hold as much of an area as its second owner, where naming them apart changes who is listed
@@ -1085,6 +1091,8 @@ def knowledge_section(report: dict, full: bool = True, width=None) -> dict:
     if gone:
         notes.append(f"gone = no commits in the {months} months before {report['meta'].get('last_date')}"
                      + ("; gone and lost are measured over the whole history" if report["meta"].get("since") else ""))
+    if recent:
+        notes.append(f"authors = recent/all; recent = a commit to the area in the {months} months before {report['meta'].get('last_date')}")
     return _section(f"Knowledge map ({counted})" if rows else "Knowledge map", columns, rows, note=None if rows else "no ownership data", caption="\n".join(notes) or None)
 
 
@@ -1819,7 +1827,7 @@ def dumps_json(report: dict, findings: list, risk: dict = None, compare: dict = 
 
 
 def to_json(report: dict, findings: list, risk: dict = None, compare: dict = None) -> dict:
-    out = {**{k: v for k, v in report.items() if k not in ("backtest", "tree", "imported")}, "findings": findings,   # the sub-report is a report of its own; the listing is the clone's
+    out = {**{k: v for k, v in report.items() if k not in ("backtest", "tree", "imported", "arrivals")}, "findings": findings,   # the sub-report is a report of its own; the listing is the clone's; the arrivals live on as the truck factor's new_since
            "watch": [{k: v for k, v in r.items() if k != "function"} | {"function": r["function"]["function"] if r["function"] else None}
                      for r in watch.risks(report)[:WATCH_FULL]]}
     out["watch_by_component"] = [{"component": g["component"], "share": round(g["share"], 3), "files": [x["file"] for x in g["files"]]}

@@ -100,7 +100,7 @@ def all_code(rows, scope=()) -> dict:
 
 NUMERIC_COLUMNS = {"n-revs", "degree", "average-revs", "n-authors", "age-months", "added", "deleted", "n-fixes", "recent-fixes", "tiny-revs",
                    "minor", "soc", "partners", "n-sets", "with-tests", "periods", "fa", "dl", "ac", "is_author", "is_author_decayed", "late",
-                   "depth", "shared", "confidence", "commits"}
+                   "depth", "shared", "confidence", "commits", "renamed", "recent"}
 FLOAT_COLUMNS = {"doa", "doa_decayed", "dl_decayed", "ac_decayed", "hcm"}
 
 
@@ -773,6 +773,9 @@ def load_report(out_dir: str, nested: bool = True) -> dict:
             continue
         surviving[key] = surviving.get(key, 0) + lines
     ownership = [r for r in parse_maat_csv(_read(out_dir, "maat-entity-ownership.csv")) if not is_bot(r.get("author") or "")]
+    for r in ownership:   # a blank `recent` is 0, and the key is kept only where there is a count (meta's ownership_recent says it was counted)
+        if "recent" in r and not r["recent"]:
+            del r["recent"]
     fixes = parse_maat_csv(_read(out_dir, "maat-fixes.csv"))
     activity = _read_json(out_dir, "activity.json", {})
     provenance = _read_json(out_dir, "provenance.json", {}) or {}
@@ -803,6 +806,9 @@ def load_report(out_dir: str, nested: bool = True) -> dict:
         "doa": doa,   # degree of authorship per file and person; empty before 0.19
         "latenight": parse_maat_csv(_read(out_dir, "maat-latenight.csv")),
         "components": parse_maat_csv(_read(out_dir, "maat-components.csv")),
+        # when each path first appeared and whether by a rename, for the files HEAD has (the area ages read no
+        # others); absent before 0.45, so an older output directory dates no area
+        "arrivals": [r for r in parse_maat_csv(_read(out_dir, "maat-arrivals.csv")) if tree is None or r["entity"] in tree],
         "authors": authors_rows,
         "age": parse_maat_csv(_read(out_dir, "maat-age.csv")),
         "ownership": ownership,
