@@ -135,6 +135,18 @@ def nameless(name: str) -> bool:
     return not name or bool(re.search(r"\s|=>|\{", name)) or "(" in name.replace("()", "")
 
 
+def brace_pair(a: str, b: str) -> str:
+    """Two paths as one cell: the directories they share, then the rest of each in braces, `tsdb/wlog/{live_reader.go,reader.go}`
+    for two files of one directory and `web/{api/v1/api.go,web.go}` for two that part further up; `{a.py,b.py}`
+    when they share none. The form a shell expands, so the cell pastes into `git log --`."""
+    pa, pb = a.split("/"), b.split("/")
+    n = 0
+    while n < min(len(pa), len(pb)) - 1 and pa[n] == pb[n]:
+        n += 1
+    shared = "/".join(pa[:n])
+    return f"{shared + '/' if shared else ''}{{{'/'.join(pa[n:])},{'/'.join(pb[n:])}}}"
+
+
 def cut(name: str, cap: int) -> str:
     """`name`, unchanged if it fits in `cap` characters, else cut to exactly `cap` ending in the ellipsis."""
     return name if len(name) <= cap else name[:cap - 1] + ELLIPSIS
@@ -142,7 +154,7 @@ def cut(name: str, cap: int) -> str:
 
 def times(n: int) -> str:
     """How often something happened, in words for the small numbers: once, twice, 3 times."""
-    return {1: "once", 2: "twice"}.get(n, f"{n} times")
+    return {1: "once", 2: "twice"}.get(n, f"{n:,} times")
 
 
 def join_and(items: list) -> str:
@@ -179,7 +191,8 @@ def _statement_and_advice(f: dict):
 
 def group_findings(findings: list) -> list:
     """Merge findings that share a title into one entry with an item list and the distinct next
-    steps its items carry, in first-seen order. Order: by severity, then first appearance."""
+    steps its items carry, in first-seen order. Order: by severity, then first appearance. `findings` are
+    the entry's own, for the default report's short form (brief.py), which reads their rule and evidence."""
     order = {"critical": 0, "warning": 1, "info": 2}
     groups, index = [], {}
     for f in findings:
@@ -187,9 +200,10 @@ def group_findings(findings: list) -> list:
         key = f["title"]
         if key not in index:
             index[key] = len(groups)
-            groups.append({"severity": f["severity"], "title": key, "items": [], "advice": []})
+            groups.append({"severity": f["severity"], "title": key, "items": [], "advice": [], "findings": []})
         g = groups[index[key]]
         g["items"].append(statement)
+        g["findings"].append(f)
         if advice and advice not in g["advice"]:
             g["advice"].append(advice)
         if order[f["severity"]] < order[g["severity"]]:
@@ -199,6 +213,13 @@ def group_findings(findings: list) -> list:
             g["title"] = f"{g['title']} ({len(g['items'])})"
     groups.sort(key=lambda g: order[g["severity"]])
     return groups
+
+
+def severity_word(severity: str) -> str:
+    """A severity as the terminal, the Markdown and the docs say it: "note" for the JSON's `info`, which stays
+    `info` in the export, in SARIF and as the level --fail-on takes. prometheus's Markdown said **info** under
+    a terminal tally of "10 notes"."""
+    return "note" if severity == "info" else severity
 
 
 def tally(findings: list) -> str:

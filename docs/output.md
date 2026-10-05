@@ -8,13 +8,14 @@ in plain words, and what to do first. This page is the reference.
 ## How to read the output
 
 1. Start with the header and the findings.
-2. The watch list is the source files ranked by revisions × lines of code, from
+2. The watch list is the source files ranked by changes × lines of code (a change is one commit that touched the file; the JSON calls them `revs`), from
    `maat-revisions.csv` joined with scc's per-file size. The change log follows
    renames, so a moved file is one entity under its new path and a pure move
    adds no lines: whoever moved a tree to `src/` did not write it, and the
    knowledge map says so. Large files that change constantly are your risk; the
-   reasons do not move a file, they say what to look at there, and the backtest
-   line says how the same list would have done six months ago, or that nothing
+   columns beside each file (`fixes`, `top author`, `look at first`) do not move
+   it, they say what to look at there, and the caption's `Check:` says how the
+   same ranking would have done six months ago, or that nothing
    has been fixed since the cut-off. The hotspots table behind
    it, which `--full` and the Markdown export add, ranks every file by the same
    product and carries the trend column; the Markdown export caps it and leaves
@@ -35,12 +36,107 @@ in plain words, and what to do first. This page is the reference.
 
 ## The terminal report
 
-1. **Header**: commits, date span, identities, branch, size, top languages,
-   one line for the share of fix commits, the share that are reverts (git's `Revert "…"` subject or its `This reverts commit <sha>` body line) when
-   there are any (the busiest weekday and hour are `--full`'s Activity
-   table), the year most surviving code was written (or why the blame pass did not run), and the share of
-   commits signed and by what (`51% of commits signed (gpg 49%, ssh 2%),
-   60% of the last year's`), and a one-line tally of the findings. Signing
+One layout for every part, and no box anywhere: a title line at column 1,
+then what the part holds two columns in. A table is its column heads, a rule
+exactly as wide as its columns, a row a line and its caption; the header,
+the Supply chain section and Since last report are grids of labelled rows,
+a value that does not fit wrapped under its own start; the Findings are
+entries, each with its mark at column 1, its statement at column 3, its
+subject lines at column 5 and its step under `↳`. One blank line between
+two parts, none inside one, and no line ends in a space.
+
+The colours are four styles and no more: bold (a part's name, a table's
+first column, and in the header the commit count and a `--since` window or
+`--path` scope), dim (labels, column heads, rules, captions, the closing
+lines, the `(not measured yet)` tag), yellow for a warning and red for a
+critical, on the finding's mark and title and on a scan's verdict in the
+Supply chain section. A note has no colour, and neither has a statement, a step or a
+number, so the report reads the same on a light theme as on a dark one.
+(The logo banner keeps its own colours and is only drawn on a terminal.)
+Without colour (`NO_COLOR`, a pipe, a file) the report is the same bytes
+with the escapes left out.
+
+Every mark has an ASCII form for a stream whose encoding cannot carry it
+(`PYTHONIOENCODING=ascii`, a legacy code page), chosen per mark, so a
+Latin-1 stream keeps its `·`: `✖` `x`, `▲` `!`, `●` `*`, `↳` `>`, the rule
+`-`, a section's pictogram `#`, `·` `-`, `×` `x`, `…` `...`, `→` `->` and
+`≥` `>=`. The report then has the same lines; a line that holds one of the
+last three is a character or two longer, so a table row with an elided path
+is that much out of its columns. Any other character the stream cannot
+carry, in a name or a path, prints as `?`. Columns are counted as a
+terminal counts cells; one that draws an East Asian ambiguous-width
+character two cells wide will show its rows one cell out.
+
+One format for numbers and one word per column, in the terminal and in
+Markdown: a count of 1,000 or more has its thousands separator, in the
+header, every table and every caption; zero prints as 0 (a month without a
+commit in the Timeline too); a span is digits and its unit (`6 months`); a
+threshold is `N or more` in a sentence and `≥N` only in a table cell; a
+bare vulnerability score has `CVSS` before it. The column heads are
+`changes` (commits that touched the file: `revs` in the JSON),
+`complexity` (cyclomatic, the function's branch points plus 1, defined in
+one line under Complex functions: `ccn` in the JSON; in Hotspots and Size by
+language it is the line counter's sum for the file) and `together` (the
+share of two files' changes made in one commit: `degree` in the JSON).
+The JSON's keys are unchanged.
+
+A table's title carries its count and what it is ranked by (`Complex
+functions · 8 of 475, by complexity`; `all 8` when every row is shown), so no
+caption ends `and 467 more`. A caption says what the table hides, as a sum
+with its breakdown (`501 pairs hidden: 289 test, 192 historical, 10 vendored,
+8 generated, 2 example`), and then defines the table's words as `term =
+meaning`, the fragments joined by ` · `: two lines at most at 80 columns,
+three under People and four under the Watch list with its `Check:`. A word is
+defined once, under the first table that prints it (`gone = no commit in the
+12 months to 2026-09-18`). How a table was made (the merge regime behind the
+coupled pairs, an import left out of ownership, the merge total, whose aliases
+were merged) is `--full`'s and Markdown's. No caption says `--full shows
+them`: the default report says it once, on the line before its last.
+
+The sections come in one order in the default report, `--full` and Markdown,
+code first and people after: Watch list, Complex functions, Change coupling,
+Knowledge map, People. `--full`'s own sections sit in their groups (the watch
+list by component and Hotspots after the Watch list, Size by language after
+Change coupling, the Timeline after People, then Activity, Surviving code by
+year, Changed lines, Trailers, Signing by year, Agent surface and the OSPS
+Baseline). The width of the terminal changes how a cell is elided and how
+prose wraps, and nothing else: no rows, no order, no month window (the
+Timeline's twelve months need 70 columns), and no two tables side by side.
+A cell is never wrapped onto a second line, and neither is a column head.
+When a row does not fit, a path loses its middle directories first
+(`prompb/…/client/decoder.go`), then the last text cell is cut with `…`; a
+number and a head are never cut, and columns that still do not fit are left
+out and named under the table. In a finding a path, a package and a version
+are always whole: one longer than the line has a line to itself. The word `gone` has one form in every
+table: after what it qualifies, one space, no brackets (`23% gone`, `Fabian
+Reinartz gone`, `2019-01 gone`); blank means active.
+
+1. **Header**: a title line, the repository with its branch and commit
+   (`prometheus · branch measure @ 296080c0`), and labelled rows, each label
+   describing everything on its row. `history`: commits, date span, the
+   `--since` window, identities. `files`: the three counts with their three
+   denominators, `1,676 tracked · 1,056 with code · 653 scored (source: not
+   test, example, generated or vendored)`: git's tracked files, the ones the
+   line counter found code in, and the source files every ranking is over.
+   `code`: lines, top languages and the year most surviving code was written
+   with the step that counted it (`23% surviving from 2026, by blame`; `by
+   git-of-theseus` after a `--plots` run, whose sampling pass rewrites the same
+   two files and gives slightly different shares; or why the blame pass did
+   not run). `commits`: the share of fix commits and the reverts (git's
+   `Revert "…"` subject or its `This reverts commit <sha>` body line) when
+   there are any; the busiest weekday and hour are `--full`'s Activity table.
+   `left out`: the sweeping commits and the ones `.git-blame-ignore-revs`
+   declares, `18 sweeping commits, not counted in churn, coupling or
+   ownership`, said here once for every table below. `scope` (a `--path` run) and `steps` (the ones that
+   did not finish) are rows when there is something to say, and a row with
+   nothing to say is not printed. The tally of the findings is the Findings
+   title's: `Findings · 4 warnings ▲ · 10 notes ● · 5 by rules not measured
+   for precision yet`, each word beside the mark
+   its entries carry. Signing is a row of the Supply chain section, last
+   in the report: the share of commits signed and by what (`51% of commits
+   signed (gpg 49%, ssh 2%), 60% of the last year's (signatures not
+   verified)`; the default report keeps the row to one line, the share and
+   the last four words, and `--full` and a wide terminal say the rest). It
    is read from the `gpgsig` header in each commit object, so it needs no
    keyring and a fresh clone reads the same as the author's; nothing is
    verified, and the figure is evidence toward SLSA Source L2, never a
@@ -49,7 +145,7 @@ in plain words, and what to do first. This page is the reference.
    carries the forge's signature and not its author's, so it is named
    apart: `12% of commits signed by their authors (gpg 12%), 0% of the
    last year's; 50% signed by the forge on merge`. `--full` and Markdown add a Signing by year table with humans
-   against bots and the busiest identities. `--full` and Markdown add a Trailers table: every hyphenated
+   against bots as two totals, and no rate per person (the JSON keeps `signing.by_identity`). `--full` and Markdown add a Trailers table: every hyphenated
    trailer key and how many commits carry it, counted without regard to
    case as git matches them (`Co-authored-by` and `Co-Authored-By` are one
    row, under the more common spelling), and never an issue reference
@@ -63,30 +159,39 @@ in plain words, and what to do first. This page is the reference.
    conventional-commit subjects, hours of the day). This
    repository against itself, with no prior from elsewhere, and nothing is
    labelled: every descriptor has an ordinary cause. The rest is every commit that declares
-   nothing, which includes any agent use nobody disclosed; it is never a group of people. With `--full`, and always in Markdown, a coverage
-   line counts the tracked text files by why they are out of the scored
-   pool: `4,512 files: 582 scored · 13 generated · 2,680 test files · 139
-   example code · 3 release files · 1,095 not a source type`, and a file of
+   nothing, which includes any agent use nobody disclosed; it is never a group of people. With `--full` the `files` row
+   counts the tracked text files by why they are out of the scored
+   pool, `4,512 tracked · 1,470 with code · 582 scored · 13 generated ·
+   2,680 test files · 139 example code · 3 release files · 1,095 not a source
+   type`, and Markdown always carries that count as a line of its own
+   (`4,512 files: 582 scored · …`); a file of
    a type scc does not classify counts as `not counted by scc`.
 
    The default header says what it ranks when that is the smaller part. When
    the files no table carries (`not a source type`, `not counted by scc`)
-   outnumber the scored ones, the header's last line, the tally, ends
-   `581 of 4,512 files scored`. When the files the type filter left out
-   also hold more lines than the scored ones, the count opens a line of
-   its own instead: `17 of 227 files scored · 69% of tracked lines are
-   documentation, not ranked · --file-types all includes them · 83% of
-   commits and 72% of fixes change only unscored files`. The lines are
+   outnumber the scored ones, the `files` row gives the scored count as a
+   ratio: `581 of 4,512 files scored`. When the files the type filter left out
+   also hold more lines than the scored ones, the `code` row adds `69% of
+   tracked lines are documentation, not ranked · --file-types all includes
+   them` and the `commits` row `83% of commits and 72% of fixes change only
+   unscored files`. The lines are
    scc's code lines, the unit of the header's own count; documentation is
    prose formats and anything under `docs/`; a tree where other types hold
    more reads `37% of tracked lines are in file types that are not ranked`.
-   The last phrase labels the populations: `25% of commits are fixes` is
+   The last phrase labels the populations: `25% are fixes` is
    over every commit, the bug magnets and the watch list over scored files,
    and it says how many commits, and how many fix commits, changed files
    and none that is scored. A tree with more test files than source files
    gets none of this: tests are in the tables, hidden, and `--full` shows
    them. The counts are under `coverage` in the JSON.
-2. **Findings**: anything the heuristics flagged, worst first. Findings of
+2. **Findings**: anything the heuristics flagged, worst first: critical,
+   warning, note. "Note" is the word in the terminal, the Markdown export
+   and these pages for the severity the JSON, the SARIF and `--fail-on`
+   call `info`. Within a
+   severity, a finding that rests on the name of a path alone (its `rule`
+   says `"by": "file name"` or `"by": "path convention"`: a tracked `.env`,
+   a personal settings file) comes after the ones a scan or a count stands
+   behind; otherwise the rules keep one fixed order. Findings of
    the same kind are grouped into one entry with a list, and every finding
    ends with a next step that names the file, area or person to start with,
    on its own line under the facts. This page says what each rule names and
@@ -94,14 +199,88 @@ in plain words, and what to do first. This page is the reference.
    carries its id and the thresholds it fired on, and its `evidence` the
    numbers they were compared with.
 
-   The default report folds the rules no label has reached yet into a
-   closing line instead of spelling them out ("4 more from the structure
-   step, not labelled yet (1 warning, 3 notes)", the severities the
-   header's tally counts them under); the set is `UNJUDGED` in
-   [gitmole/findings.py](https://github.com/antvinni/gitmole/blob/main/gitmole/findings.py).
-   `--full`, Markdown, JSON (where they carry `"summary": true` and
-   `"unjudged": true`), SARIF and `--fail-on` treat them like any other
-   finding. Until 0.39.0 a second line named the rules whose findings were
+   The default report prints each finding in a short form: the count and
+   the rule's own numbers (`62 functions have 100 lines or more and
+   complexity 15 or more`), the worst subject, and the step in three lines
+   at most. `--full`, the Markdown export, the JSON and SARIF keep the
+   whole statement with every subject it names; the short form is a second
+   rendering of the same `rule` and `evidence`, and changes neither.
+   - A finding whose subjects are a table of the same report in the same
+     order names the worst one and points there: Brain methods at Complex
+     functions, Files that always change together at Change coupling
+     (`(see Complex functions)`). The pointer is printed only when that
+     table is in the report with the subject in it; otherwise the subject's
+     numbers are said in the finding.
+   - Any other finding has three subject lines at most, indented under its
+     statement. A list that is cut says `and N more`, and is never cut
+     between two subjects with the same count. Bug magnets counts its
+     files on either side of its warning threshold, so the parts sum to the
+     total: `7 at 5 or more: promql/engine.go 10, ... · 11 at 3 or 4`.
+   - Vulnerable dependencies is the one exception to the three lines: its
+     subjects are lock files, at most three of them in at most three lines
+     each, and one line counting the rest (`and 25 more packages:
+     dependencies.json`), ten lines in all whatever the repository holds.
+     The lock files come path first and whole, in a fixed order: the one
+     something declares as shipped (`go.mod, which Dockerfile and 88 more
+     ship:`, the first such lock in the rule's order, with as many of its
+     packages as the three lines hold and the rest counted as `and N more
+     there`), then the one holding the highest score, then the one holding
+     the package the step names. A lock file is one entry however many of
+     the three it is. Every package named has one advisory id, its score
+     when there is one, `fixed in` and the version or `no fix published`,
+     and `imported by no tracked file` or `a dev dependency` when the scan
+     says so; packages of one lock file that share all of those are named
+     together and the facts said once (`for both, no fix published, ...`).
+     A lock file whose score is in the critical band while the finding is
+     a warning ends `not critical, as nothing beside it declares a
+     deployment`. With one lock file the statement names it and the
+     entry has no path in front.
+   - The truck factor says what the number means (`9 people would have to
+     leave before 333 of the 653 source files (51%) had no author left`),
+     how many of them are already gone, and the areas where one person
+     leaving would be enough; the names of a truck factor over three and
+     the variant with knowledge halving are in `--full`.
+   - A credential-shaped file is `matched by name`. When the secrets step
+     ran to its end and holds no row for the path, at any commit, the
+     finding adds `The secrets scan found no value in it, at HEAD or in
+     history` and its step becomes conditional (`If it holds a login,
+     ...`); when the step did not run, or has a row for the file, neither
+     is said.
+   - A Go pseudo-version is shortened by its shape to its base and its
+     12-character commit (`0.307.4-0.…-1174b0ce4f1f`), installed and fixed
+     alike; the 14-digit commit time between them is in `--full`.
+   - The note for vulnerable packages only in test, example or vendored
+     lock files is one sentence with no step.
+   - A rule with no short form of its own prints its statement whole when
+     that is three lines or fewer, else what comes before its list and
+     three lines of the list.
+
+   Every finding is an entry with a mark of its own, so the marks can be
+   counted against the title's tally. A finding from a rule whose
+   precision nobody has measured yet (the set is `UNJUDGED` in
+   [gitmole/findings.py](https://github.com/antvinni/gitmole/blob/main/gitmole/findings.py))
+   has the dim tag `(not measured yet)` after its title, in the default
+   report and in `--full`, and the Findings title says once what the tag
+   means and how many carry it: `· 5 by rules not measured for precision
+   yet`, or in fewer words (`5 not measured for precision yet`, `5 not
+   measured yet`) where the title would be longer than the line. A warning
+   or a critical from such a rule is an entry like any other. A note from
+   one is compact in the default report: the title, the tag, a colon and
+   one statement, three lines at most and no step (`● Possibly
+   unreferenced files (not measured yet): 3 files imported by nothing in
+   the tree; first discovery/install/install.go`). The statement names
+   the subject the rule's own advice picks, which need not be the first
+   the long statement lists: the hotspot with the most TODO markers, the
+   largest import group's shortest loop, the function in a top hotspot.
+   A note that would name a pair the entry *Files that always change
+   together* has just named says `the one above`. `--full` and Markdown
+   spell these findings out with their steps; JSON (where they carry
+   `"summary": true` and `"unjudged": true`), SARIF and `--fail-on` treat
+   them like any other finding, and the `--fail-on` line on stderr says
+   `not measured yet` when one of them tripped the gate. Until 0.44.0 the
+   default report folded them into one closing line ("5 more from the
+   structure step, not labelled yet"), which left the title counting a
+   warning that no ▲ stood for. Until 0.39.0 a second line named the rules whose findings were
    labelled true but never as something to act on ([measurement.md](measurement.md),
    "Hand labels"); those nine rules were retired instead: duplicated blocks,
    git-sizer's repository health, reverts, stale files, components that
@@ -134,8 +313,13 @@ in plain words, and what to do first. This page is the reference.
      a one-sided binomial test per file over the whole history, with a
      Benjamini-Hochberg false discovery rate of 5% over every source file.
      Fixes cluster within a pull request, which makes the test err towards
-     finding, so it orders and annotates and decides nothing: which files
-     are magnets, and the severity, are the six months' counts. With less
+     finding, so it orders and annotates, and which files are magnets is
+     the six months' counts. It decides one thing: when it ran and put no
+     file above the rate ("no file more often than is usual for its size", an empty
+     `evidence.fix_rate.above_rate`), the finding is a note, not a warning,
+     since its own sentence says nothing here is unusual, and
+     `--fail-on warning` does not stop on it. With a file above the rate
+     the severity is the six months' counts. With less
      than twelve months of history the test does not run (it would test
      the window's own counts again); the finding says so, and is a note
      whatever the counts, since raw fix counts mostly follow file size.
@@ -396,17 +580,21 @@ in plain words, and what to do first. This page is the reference.
    area is as new as the rest). One
    author is what a new area has, so the advice never starts in one. It is
    computed a second time with knowledge decaying over time
-   (JetBrains' Bus Factor Explorer), and when the surviving code's largest
-   share belongs to someone else, the finding says so.
+   (JetBrains' Bus Factor Explorer). It does not name who holds the largest
+   share of the surviving code: that is the bus factor's measure, and the
+   name changed with the step that counted the lines.
 
-   Two checks are also reported when they pass: a green `No secrets in
-   history` line closes the panel whenever the betterleaks scan ran and
-   found no secret value, and a green `No known vulnerabilities in
-   dependencies` line whenever osv-scanner checked the lock files and found
-   nothing, so a clean result is said out loud rather than left to silence.
-   Neither is counted as a finding. When a scan did not run, because the
-   step was killed or `--no-run` points at an output directory without its
-   file, the line is absent. The Markdown export carries them as `**ok**`.
+   Two scans are also reported when they pass, so a clean result is said
+   out loud rather than left to silence: the Supply chain section's
+   `secrets` row opens `none found: betterleaks scanned every commit HEAD
+   reaches` whenever the betterleaks scan ran and found no secret value,
+   and its `dependencies` row says `none vulnerable` whenever osv-scanner
+   checked the lock files and found nothing. Neither is counted as a
+   finding. When a scan did not run, because the step was killed or
+   `--no-run` points at an output directory without its file, the row says
+   `not scanned` where the verdict would be. The Markdown export carries
+   the two passes as `**ok**` lines under its findings. Until 0.44.0 the
+   terminal report had them as two green ✔ lines closing the Findings.
 
    Vulnerable dependencies come from osv-scanner over the lock files,
    offline against the local copy of the OSV database (see
@@ -457,8 +645,13 @@ in plain words, and what to do first. This page is the reference.
    and a row whose specifier does not name one version (`==`) is said as a
    range whose floor is vulnerable, never counted as an installed package,
    and never critical by its score. Requirement files are counted apart
-   from lock files, here and in the footer. The advice names the package to upgrade
-   first, or, for a malicious one, to remove. An advisory that does not
+   from lock files, here and in the Supply chain section. The advice names the package to upgrade
+   first, or, for a malicious one, to remove: a malicious package, then one
+   that makes the finding critical, then the highest score that has a fixed
+   version published ("it scores CVSS 9.2, the highest with a fix published";
+   a bare score in a finding always carries the word CVSS),
+   which need not be the first package the sentence lists, since those are
+   in order of reach. An advisory that does not
    apply to your code is silenced in `osv-scanner.toml` at the repository
    root. Each row says whether any tracked source imports the package
    (`imported`: true, false, or unknown where the import name need not be
@@ -469,8 +662,8 @@ in plain words, and what to do first. This page is the reference.
    unimported package is still installed. This is not reachability, which
    needs a buildable tree. A package whose every advisory is informational
    (RustSec's `unmaintained`, `unsound` and `notice`, which report no
-   vulnerability) is not counted as vulnerable; the footer names it. The
-   footer line says how many packages in how
+   vulnerability) is not counted as vulnerable; the Supply chain section's
+   `dependencies` row names it. That row says how many packages in how
    many lock files were checked and how old the database copy is; without
    lock files, or without the database, it says that instead.
 
@@ -488,21 +681,22 @@ in plain words, and what to do first. This page is the reference.
    labelled never actionable); nor is a value found only in generated
    files, mocks (`mock/`, `mocks/`, `mock_*`, `*_mock.*`), tooling under
    `hack/`, `fixtures-*` directories or `testdata.*` files. Such values
-   still count in the footer's `Secrets:` line and stay in `secrets.json`,
-   so the green `No secrets in history` line does not appear while any is
-   there, and the OSPS-BR-07.01 row counts them beside its result.
+   still count in the Supply chain section's `secrets` row and stay in
+   `secrets.json`, so the row opens `none in source files`, not `none
+   found`, while any is there, and the OSPS-BR-07.01 row counts them
+   beside its result.
    A copy in an unreachable blob has no path, so the value's other copies
    decide; a value found only in unreachable blobs counts as source.
    betterleaks grades each sighting low, medium or high. A value that only
    the scanner's `generic-*` rules found, and that was graded low
-   everywhere, is a possible secret: an info note, since an ordinary
+   everywhere, is a possible secret: a note, since an ordinary
    assignment or a hash reads the same way. A `generic-*` value that is
    one word in one case (`PGPASSWORD: postgres`) is graded low whatever
    its context, since that is a service default or a sample. A provider's
    rule (an AWS key id, a Slack token) stays critical at any grade.
 
    Shapes that cannot be a live secret are left out, counted on the
-   footer line: version strings, tokens shortened with "...", a dotted
+   `secrets` row in `--full` and on the Markdown export's `Secrets:` line: version strings, tokens shortened with "...", a dotted
    path of lowercase words such as `passwords.password` (a translation or
    config key), whole-value
    template markers such as `your-project-id`, `<your-token>`, `XXXX-XXXX`
@@ -544,7 +738,7 @@ in plain words, and what to do first. This page is the reference.
    less those a ref reaches, writes the blobs among them (up to a cap on
    count and size) under the output directory for one `betterleaks dir`
    pass, removes them again, and reports what it finds as `(unreachable
-   blob <hash>)`; the footer says how many it scanned, or that there were
+   blob <hash>)`; the `secrets` row in `--full`, and the Markdown export's `Secrets:` line, say how many it scanned, or that there were
    none, which is what a fresh clone looks like, since a clone fetches only
    what a ref reaches. What each clone happens to hold is its own, not the
    commit's, so the counts sit in the `--json` export's `envelope` and a
@@ -584,7 +778,7 @@ in plain words, and what to do first. This page is the reference.
    age counts, along with every commit the repository declares
    uninteresting in `.git-blame-ignore-revs` (and the file
    `blame.ignoreRevsFile` names); the activity totals keep them,
-   `activity.json` lists them, the watch list's caption counts them, and
+   `activity.json` lists them, the header's `left out` row counts them, and
    the finding names the undeclared ones with the advice to declare them,
    so that git blame and GitHub skip them too. An import is left out the
    same way: a commit that adds to a great many files, deletes almost
@@ -630,16 +824,25 @@ in plain words, and what to do first. This page is the reference.
    counts its changes as someone else's. The knowledge map shows the tools'
    part of each area in an `agents` column when a shown area has a whole
    percent of it (the default report: where they hold as much as the
-   second owner), and the People caption says how many were left out.
+   second owner), and the People caption says how many names were left out,
+   how many spellings that is with their aliases, the no-reply addresses
+   they share and their commits, as the subtraction from the header's count of
+   identities to the title's (`1,324 = 1,327 identities less 3 coding-tool
+   names (7 with aliases, sharing 1 no-reply address, 32 commits)`), the same
+   words in the default report, `--full` and Markdown. No rendering of the People
+   table has an email column, at any width; the addresses stay in the
+   JSON export's `meta.identities`.
    Someone credited only by trailers, who never commits, is a person and
    counts as one.
 3. **Since last report**: with `--compare BEFORE.json`, what changed
-   against an earlier `--json` export of the same clone. Findings are
+   against an earlier `--json` export of the same clone, as a grid of
+   labelled rows on a terminal (the change, then what changed, wrapped
+   under its own start) and a two-column table in Markdown. Findings are
    matched by their rule id, and for a rule that emits one finding per row
    by the rule id with the mailbox (unconfigured identity), or the metric
    for an export from before 0.39.0 that still has git-sizer's repo health; each one is listed as new, resolved or
    persisting, and a persisting finding whose severity moved says
-   `warning → info`. A persisting finding whose counts moved says which,
+   `warning → note`. A persisting finding whose counts moved says which,
    from the numbers in its evidence (`values 16 → 1`, `files 3,217 →
    3,400`), so a finding that shrank or grew is not read as unchanged; the
    JSON keeps them as `changed`. Then the files that entered and the files that left
@@ -655,15 +858,27 @@ in plain words, and what to do first. This page is the reference.
    vulnerable-dependency finding with no change to the code. Markdown
    carries the section and the JSON carries it under `compare`. The comparison never changes the exit code: `--fail-on`
    reads this run alone.
-4. **Watch list**: the five source files most likely to need a fix next, with
-   the reasons in words. Every source file still in the tree that changed
-   more than once is ranked by revisions × lines of code, over source
+4. **Watch list**: the five source files most likely to need a fix next, one
+   line each with its numbers in columns: `changes` (the commits that touched
+   it), `fixes` (in the six months to the last commit, the window the caption
+   states: a file fixed 31 times long ago shows 0), `top author` (the largest
+   share of the lines added to the file that one person holds, with `gone`
+   after it when that person has no commit in the `--gone` window; the share
+   and no name, since `gone` beside a 10% share is not a file left without
+   an author) and `look at first` (the function nested deepest when that is
+   five levels or more, else the most complex one at complexity 10 or more;
+   the column is left out when no row shown has either). The title counts the
+   rows against the list's fifteen (`5 of 15`) and names the ranking.
+   Every source file still in the tree that changed
+   more than once is ranked by changes × lines of code, over source
    files only: measured against the fixes that followed at six cut-offs
    on three repositories
    ([validation.md](https://github.com/antvinni/gitmole/blob/main/docs/validation.md)),
    it named more of them than any weighting of fixes, complexity and
    ownership did. A file's score, which `--risk` adds up, is its share, in
-   percent, of all scored files' revisions × lines of code. The reasons
+   percent, of all scored files' changes × lines of code. The reasons, which
+   the JSON carries as `watch[].reasons`, `--hook` joins into its context and
+   `--risk` prints beside each file,
    name the fix count (the last six months' when there are any), the sole
    owner, the minor contributors (people with a small share of the file's
    commits each), the most complex function lizard found (a nameless one
@@ -695,12 +910,14 @@ in plain words, and what to do first. This page is the reference.
    list by component: each component's share of the list's revisions ×
    lines of code and its own top three files, since one busy subtree
    otherwise takes the whole list; the JSON carries it as
-   `watch_by_component`. The default report shows a row's
-   first six reasons, most actionable first, and counts the rest (`· 3
-   more`); `--full`, Markdown and the JSON carry them all.
+   `watch_by_component`. The default report prints no reasons in
+   words. `--full` prints the ones the columns do not hold on one indented line
+   under each row, Markdown in a last column (`also`), and the JSON carries
+   them all.
    With `--risk BASE`, a
    Change risk section follows: every file changed since BASE with its watch
-   score as a bar and the reasons, or why it has none: the first reason that
+   score as a bar and, on the lines under its row, the reasons whole (a last
+   column, `why`, in Markdown), or why it has none: the first reason that
    applies of `generated`, `vendored`, `test file`, `example code`,
    `release file`, `amalgamation`, `not a source type` and `not in the
    tree`, the last covering a file the change deleted and, under `--no-run`,
@@ -719,18 +936,23 @@ in plain words, and what to do first. This page is the reference.
    coding agent's hook, see
    [cli.md](https://github.com/antvinni/gitmole/blob/main/docs/cli.md#agent-hooks).
 
-   Under the watch list, one line says how the list would have done:
-   gitmole reruns the change analysis as of six months before the last
-   commit, with scc on the tree at that time, ranks the watch list from
-   that, and counts how many of the files fixed since were on it, out of
-   the fixed files that had changed more than once by then (the pool the
-   list draws from). It then says in words whether that was fewer, no more
-   or more than the same number of most-changed files, and whether it was
-   more than a random list of the same size would name by chance: the
-   one-sided hypergeometric test (Fisher's exact test) at p < 0.05, from
-   the pool, its fixed files, the list's length and its hits, all in the
-   JSON's `watch_backtest`. Repositories with under a year of history say
-   `too little history to backtest`.
+   Under the watch list, the caption's `Check:` says how the ranking would
+   have done: gitmole reruns the change analysis as of six months before the
+   last commit, with scc on the tree at that time, ranks the watch list from
+   that, and counts how many of the files fixed since its top fifteen held,
+   out of the fixed files that had changed more than once by then (the pool
+   the list draws from): `6 months ago the top 15 of this ranking held 13 of
+   the 91 files fixed since. The 15 most-changed files also held 13; 15
+   random files would hold 2.9.` The second sentence is the comparison: what
+   the same number of most-changed files held, and what a random pick of that
+   size would. When the result is one a random pick could have given, by the
+   one-sided hypergeometric test (Fisher's exact test) at p < 0.05, the
+   sentence ends `and 3 is not distinguishable from that (p = 0.19)`.
+   `--full` and Markdown add what the count is over (`Counted over the 464
+   files that had changed more than once by then; 24 more files fixed since
+   had not; p < 0.001.`); the pool, its fixed files, the list's length and
+   its hits are all in the JSON's `watch_backtest`. Repositories with under a
+   year of history say `Check: none, too little history to backtest`.
 
    When documentation is more than half the tree's lines and none of it is
    ranked, a short list follows the watch list: **Most-changed documents**,
@@ -759,7 +981,7 @@ in plain words, and what to do first. This page is the reference.
    unless it is one word that two people's full names in the history hold
    or that is written as a given name (Jack, George), a one-word handle
    that is a distinctive word of the fuller name, the fuller name run together
-   (RobinMalfait), or an initial plus the surname (nlohmann); the caption says whose; merges
+   (RobinMalfait), or an initial plus the surname (nlohmann); the title counts them (`242 with aliases merged`) and `--full` says whose; merges
    counted in a column of their own and left out of the commit count and
    share, since merging every pull request is not writing the code; a row's
    merges and its surviving code are its own, by the name and address git
@@ -768,14 +990,21 @@ in plain words, and what to do first. This page is the reference.
    which are any author named `*[bot]`, any identity that merges with
    one (`github-actions` beside `github-actions[bot]` is one account),
    and any author whose name says bot, CI, deploy or automation, no
-   product names, are counted apart in the caption and kept out of the
+   product names, are counted in the caption (`4 bots left out:
+   dependabot[bot] 882, 3 more`) and kept out of the
    timeline; their lines are left out of ownership and surviving code
-   too, so a deploy job that commits a built site owns nothing), a knowledge map (lines added per area of the tree
-   and who wrote them), a timeline of commits per author over the last
-   twelve months, change coupling, the most complex functions, repo
-   health. On a narrow terminal the timeline shows fewer of those months,
-   dropping the oldest, rather than folding an author's name; the title
-   names the months shown. Hotspots, ranked by revisions times lines of
+   too, so a deploy job that commits a built site owns nothing; the caption
+   defines `share` (of commits, without merges) and `surviving` with the step
+   that counted it, `surviving = blame share at HEAD` or git-of-theseus's; `last commit` is
+   the month each person was last seen, with `gone` after it past the `--gone` window, so the table that
+   opens on someone who left in 2019 says so), a knowledge map (lines added per area of the tree over its history, headed
+   `added` since it is not the area's size at HEAD, and who wrote them, each owner's share in the column beside the name),
+   change coupling, the most complex functions, repo
+   health. The Timeline, commits per author per month, is `--full`'s and Markdown's: no rule reads it. It is
+   the twelve months to the last commit at every width (fewer only when the history or the `--since` window is shorter),
+   ranked on the total of those months; a name too long for the room they leave is cut, never the months. The month of
+   the last commit is marked `*` when that commit is before the month's end, and the caption says the rows are
+   identities as merged, so one person under two names the run did not join has two rows. Hotspots, ranked by revisions times lines of
    code with the number of fix commits alongside, rank the same files the
    watch list leads with, and so appear under `--full` and in the Markdown
    export, next to size by language, activity and surviving code by year.
@@ -786,7 +1015,8 @@ in plain words, and what to do first. This page is the reference.
    day, code-maat's temporal period, so a rebase-merged pull request is one
    change again and a change spread over a ticket's commits counts once;
    the cap on files per change applies after grouping, and the sum of
-   coupling and the test co-change counts use the same changes. The caption
+   coupling and the test co-change counts use the same changes. Under `--full`
+   and in Markdown the caption
    says how changes reach the branch when that changes what a pair means:
    almost no merge commits and most subjects ending `(#NNNN)` is a
    squash-merged repository, whose pairs describe pull requests rather than
@@ -796,7 +1026,17 @@ in plain words, and what to do first. This page is the reference.
    no longer in the tree, since they describe a layout that no longer
    exists, and shows a directory whose files all change together (generated
    tables, one file per version) as one row with the file count and the
-   weakest degree; the caption counts both and `--full` shows every pair.
+   weakest share; the caption gives the hidden pairs as a sum with its
+   breakdown and says what a directory row is (`a directory row = its files
+   change with each other (15 pairs)`), and `--full` shows every pair. The two
+   files of a pair are one cell, the directories they share said once and the
+   rest of each in braces, the form a shell expands:
+   `web/ui/mantine-ui/src/promql/{format.tsx,serialize.ts}`, or
+   `web/{api/v1/api.go,web.go}` for two that part further up. In two columns
+   both paths lost their middle at 80 columns; in one, the rows print whole.
+   The column `together` is the share of the two files' changes made in one
+   commit (`degree` in the JSON); `--full` adds `avg changes`, the mean of
+   their change counts (`average-revs`).
    Hotspots hide files no longer in the tree the same way; `--full`, which hides nothing else, gives them one
    line (`412 removed files not listed, 312 from left-out imports`), since a file that is gone has no lines,
    complexity or score to show, and `maat-revisions.csv` still lists every one. Hotspots carry a `trend` column, sampled for the
@@ -805,7 +1045,7 @@ in plain words, and what to do first. This page is the reference.
    shows the whole series as a sparkline), and under `--full` a `minors` column (contributors with a
    small share of the file's commits) and a `co-changes` column (the files
    it often changes with). The knowledge map marks owners who have stopped committing
-   with `(gone)`, and under `--full` shows the share of each area's lines
+   with `gone` after the name, and under `--full` shows the share of each area's lines
    that they wrote and how many of its authors committed to it in the
    `--gone` window (`recent`, a count with no names). With `--full`: size by language, activity by weekday
    with the busiest hour and the share of commits that are fixes, and
@@ -900,29 +1140,96 @@ in plain words, and what to do first. This page is the reference.
    lines. Activity and the
    timeline cover the whole history.
    The default report collapses what says little, by counts and never by
-   a repository's size. A People or Timeline row needs five commits (in
-   the months shown, for the timeline), the floor the coupling table
+   a repository's size. A People row needs five commits, the floor the coupling table
    already uses for "enough commits to say anything"; the rest are counted
-   as `and N more`, and the top three rows stay whatever they hold. The
-   change coupling table is left out when it would be one pair that a
-   watch-list row already shows with its degree and nothing but test
-   pairs was hidden. The complex functions table is one line (`no long,
+   in the title (`People · 3 of 8 identities`), and the top three rows stay whatever they hold. The
+   change coupling table is left out when it would be one pair that the
+   finding *Files that always change together* already names with its share
+   and nothing but test pairs was hidden. The complex functions table is one line (`no long,
    complex functions; highest complexity 16 (handleRequest); --full lists
-   5 at 10 or over`) when no function meets the brain-methods rule itself,
+   5 at 10 or more`) when no function meets the brain-methods rule itself,
    complexity 15 or more over 100 lines or more, and the whole list fits
    the table's eight rows; a longer list stays a table. `--full` and the
    Markdown export keep every one of these tables whole.
-6. **Footer**: a `Secrets:` line and a `Dependencies:` line with each
-   scan's totals, then where the files and plots are. The default report
-   leaves the two lines out when both scans found nothing and the two ✔
-   lines in the findings panel already say so (the secrets ✔ line then
-   also carries what only the footer said, the sweep of unreachable
-   objects); a value, a vulnerable package, an informational advisory or
-   a scan that did not run keeps them. `--full` and Markdown close
-   with a Run line above it: what produced the report, gitmole's version,
-   every tool's and the `--ignore`, `--ignore-data` and `--deep` options,
-   read from the run manifest `meta.run` (the commit, the versions, the
-   options). The header shows that commit as `branch main @ 540ee5b5`.
+6. **Supply chain**, last: a titled grid of labelled rows, what the scans
+   and the tree's own declarations say in one place. No row carries a
+   status mark; the first words of a scan's row are its verdict, in the
+   colour of the worst finding behind it and in none when no finding is.
+   - `secrets`: the verdict and its rule first. `none found: betterleaks
+     scanned every commit HEAD reaches` when the scan held no value;
+     `none in source files (secrets.json)` when every value it held is in
+     a file that is no source, which is the rule that makes a value a
+     finding; `2 values in the findings above, 3 more never in source`
+     otherwise. Then the places, HEAD apart from history: `at HEAD 18
+     places, all in test or example files, none high confidence ·
+     history only 1,170 places, 1,156 high confidence, those all in
+     example files`. A place is one value at one commit, file and line,
+     placeholder-shaped hits left out. Where the places are is counted
+     from the file classifier every table uses (generated, vendored,
+     test, example), so the clause reads `12 of them in test files` when
+     that is the count, and never names a kind of file the classifier
+     does not.
+   - `dependencies`: what was scanned and the date of the database copy,
+     then the totals, reconciled with the findings above: `29 vulnerable
+     in 46 places: 28 in the warning above, 3 in the note, 2 counted in
+     both (dependencies.json)`. The two dependency findings each count a
+     package once, so one pinned by a source lock and by an example's
+     lock is in both; with one finding the row says `all in the warning
+     above`. A package with only an informational advisory is named
+     after the totals. `no lock files found`, or `not scanned` with the
+     reason, stands alone.
+   - `signing`: see the header's entry above.
+   - `checked, ok`: the hygiene checks that ran with something to check
+     and found nothing, from a fixed list in a fixed order: workflow
+     actions pinned, what the update tool covers, manifests level with
+     their lock files, files free of bidi and mixed-script characters,
+     then binaries with none executable, the licence, the declared files
+     (CODEOWNERS, security policy, pull-request template), workflows
+     free of pull-request checkout and script injection, submodule URLs,
+     symlinks, and declared dependencies all imported. A check with a hit
+     is a finding above and never here; one with nothing to check (no
+     workflow, no lock file) is absent, as is the whole row when the
+     hygiene step did not run. The registry-confusion and install-script
+     checks record no count of what they looked at and are in
+     `hygiene.json` only.
+
+   The default report holds the grid to ten lines: three each for
+   `secrets`, `dependencies` and `checked, ok` and one for `signing`. A row
+   that would pass its lines says less, in a fixed order (the secrets row
+   drops where the places are, then the places; the dependencies row
+   drops the split between the findings; `checked, ok` stops at the last
+   check that fits and ends `more in hygiene.json`). `--full` prints every
+   row whole and adds what the default leaves to it: the number of
+   distinct values, the placeholder-shaped hits left out, and the sweep of
+   unreachable objects.
+
+7. **Closing lines.** The default report ends with at most six lines and
+   the path:
+   - one sentence naming what `--full` adds: `--full shows the hidden rows
+     and adds 11 sections: Watch list by component, Hotspots, ..., OSPS
+     Baseline (2 gaps, 1 not seen, of 10).` The list is generated from the
+     sections only `--full` prints that have rows for this report (no
+     Agent surface without agent files), and the OSPS result is its only
+     number;
+   - the steps line: `15 of 18 steps ran; --plots runs the other 3 (code
+     survival, 2 plots).` The total is every step a run can take; each one
+     that did not run is named with the flag that runs it (`--plots`,
+     `--deep` for a blame pass projected past its budget) or with what
+     became of it (`functions not run`, `trend timed out`). Plots are
+     named here only when they were drawn (`2 plots drawn (code-age.png,
+     survival.png)`);
+   - `gitmole DIR --no-run --full re-renders this run, DIR being the path
+     below.`;
+   - the output directory's path, alone on the last line.
+
+   `--full` closes with the steps line, a Run line (what produced the
+   report: gitmole's version, every tool's and the `--ignore`,
+   `--ignore-data` and `--deep` options, read from the run manifest
+   `meta.run`), and `Full results in …` (`Full results and plots in …`
+   only when the directory holds a plot). Markdown keeps its `Secrets:`
+   and `Dependencies:` lines with each scan's totals, the Run line and
+   the `Full results` line. The header shows the manifest's commit as
+   `branch main @ 540ee5b5`.
 
 A full example, at a pinned commit, is
 [docs/examples/react.md](https://github.com/antvinni/gitmole/blob/main/docs/examples/react.md).

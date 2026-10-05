@@ -469,6 +469,29 @@ class FromThePaperclipExport(unittest.TestCase):
         self.assertEqual(len(subjects), 2, subjects)
         self.assertTrue(any("second" in s for s in subjects) and any("surviving" in s for s in subjects))
 
+    def test_a_tool_shown_as_an_owner_in_the_map_with_shares_in_their_own_columns(self):
+        from unittest.mock import patch
+        km = {"columns": ["area", "added", "main owner", "share", "second", "share"], "rows": [["src/", "160", "Ann", "62%", "Tool gone", "38%"]]}
+        people = {"columns": ["author", "commits", "share", "surviving"], "rows": [["Ann", "50", "98%", "56%"], ["Tool", "1", "2%", "44%"]], "caption": None}
+        r = report(meta={"identities": self.IDS})
+        with patch.object(consistency, "_render", side_effect=lambda rep, section, full=True: km if section == "knowledge_section" else people):
+            subjects = [c["subject"] for c in consistency.over(r)["complaints"] if c["check"] in ("tool_owner", "agent_owner")]
+        self.assertEqual(subjects, ["knowledge map: Tool is second of 1 area(s), e.g. src/", "People: Tool holds 44% of the surviving code"],
+                         "the name is found before the word gone, and the column under its shorter head")
+
+    def test_the_checks_read_every_row_of_a_table_whatever_the_report_caps(self):
+        """A tool past the fiftieth row of People and of the knowledge map is still a tool shown as an owner: the
+        checks ask for the section whole (render.SECTION), which is every row whether or not --full caps its tables."""
+        ids = [{"name": f"P{n:02d}", "email": f"p{n}@x.org", "commits": 200 - n, "authored": 200 - n} for n in range(70)] + self.IDS[1:]
+        own = [{"entity": f"d{n:02d}/a.py", "author": f"P{n:02d}", "added": 1000 - n, "deleted": 0, "commits": 3} for n in range(70)]
+        own += [{"entity": "zz/a.py", "author": "Ann", "added": 9, "deleted": 0, "commits": 3}, {"entity": "zz/a.py", "author": "Tool", "added": 5, "deleted": 0, "commits": 3}]
+        r = report(meta={"identities": ids}, ownership=own, theseus_authors={"P00": 100, "Tool": 80})
+        self.assertEqual(len(consistency._render(r, "people_section")["rows"]), 72)
+        self.assertEqual(len(consistency._render(r, "knowledge_section")["rows"]), 71)
+        subjects = [c["subject"] for c in consistency.over(r)["complaints"] if c["check"] == "tool_owner"]
+        self.assertEqual(subjects, ["knowledge map: Tool is second of 1 area(s), e.g. zz/", "People: Tool holds 44% of the surviving code"])
+        self.assertEqual(len(consistency._render(r, "people_section", full=False)["rows"]), 6, "a check that asks for the default's table gets it")
+
     def test_a_tool_kept_out_of_the_tables(self):
         r = report(meta={"identities": self.IDS}, ownership=self.OWN[:1], theseus_authors={"Ann": 100},
                    tools={"names": ["Tool", "Helper"]})
@@ -684,6 +707,36 @@ class FromTheSuperpowersExport(unittest.TestCase):
         table["rows"][0][2] = "Ann (9%)"
         self.assertEqual(self.drawn(None, table=table), [])
 
+    def test_a_tied_owner_is_read_with_the_share_in_its_own_column_too(self):
+        """The map drawn with the shares beside the names and "gone" after a name: the same check, the same complaint."""
+        table = {"columns": ["area", "added", "main owner", "share", "second", "share"],
+                 "rows": [["plugin/", "96", "Ann", "8%", "Bo gone", "8%"], ["src/", "900", "Bo", "60%", "Ann gone", "30%"], ["hooks/", "75", "Bo", "100%", "-", "-"],
+                          ["docs/", "40", "shared by 3", "33%", "-", "-"]]}
+        with mock.patch.object(consistency, "_default_report", return_value=None), mock.patch.object(consistency, "_render", return_value=table):
+            said = [c["subject"] for c in consistency.over(report())["complaints"] if c["check"] == "tied_owner"]
+        self.assertEqual(said, ["knowledge map: plugin/ Ann and Bo, both 8%"])
+        table["rows"][0][3] = "9%"
+        self.assertEqual(self.drawn(None, table=table), [])
+
+    def test_an_owner_cell_is_read_in_either_drawing(self):
+        self.assertEqual(consistency._owner_names("Ann (gone) (30%)"), {"Ann"})
+        self.assertEqual(consistency._owner_names("Ann (30%)"), {"Ann"})
+        self.assertEqual(consistency._owner_names("Ann"), {"Ann"})
+        self.assertEqual(consistency._owner_names("Ann gone"), {"Ann", "Ann gone"}, "a gone Ann, or somebody named so: the caller knows its names")
+        km = {"columns": ["area", "added", "main owner", "share", "second", "share"]}
+        self.assertEqual(consistency._owner_share(km, ["src/", "9", "Ann gone", "70%", "Bo", "30%"], "main owner"), ("Ann", "70"))
+        self.assertEqual(consistency._owner_share(km, ["src/", "9", "Ann gone", "70%", "Bo", "30%"], "second"), ("Bo", "30"))
+        self.assertIsNone(consistency._owner_share(km, ["src/", "9", "Ann", "100%", "-", "-"], "second"))
+        old = {"columns": ["area", "lines added", "main owner", "second"]}
+        self.assertEqual(consistency._owner_share(old, ["src/", "9", "Ann (gone) (70%)", "Bo (30%)"], "main owner"), ("Ann", "70"))
+        self.assertIsNone(consistency._owner_share(old, ["src/", "9", "Ann (100%)", "-"], "second"))
+
+    def test_the_merge_total_is_read_in_either_wording(self):
+        self.assertEqual(consistency._MERGES_IN_ALL.search("commits and share leave out merges, which are counted apart (5,019 in all)").group(1), "5,019")
+        self.assertEqual(consistency._MERGES_IN_ALL.search("share = of commits, without merges · 5,019 merges in all").group(2), "5,019")
+        self.assertEqual(consistency._MERGES_IN_ALL.search("1 merge in all").group(2), "1")
+        self.assertIsNone(consistency._MERGES_IN_ALL.search("share = of commits, without merges"))
+
     def test_a_finding_whose_area_owner_is_tied(self):
         own = [{"entity": "plugin/a.py", "author": "Ann", "added": 50}, {"entity": "plugin/b.py", "author": "Bo", "added": 50},
                {"entity": "src/a.py", "author": "Bo", "added": 500}]
@@ -744,6 +797,65 @@ class FromTheSuperpowersExport(unittest.TestCase):
         self.assertEqual(subjects, ["'1 packages' (2x)"])
         fine = ["│ 1 package in 1 lock file; 21 files, 1,001 commits, 0.1 lines, v1 files │", "  Ann   1", "  files hidden"]
         self.assertEqual(self.complaints(fine), [], "a row's last number is not the next line's count")
+
+    def test_one_followed_by_a_plural_in_the_supply_chain_section(self):
+        """The footer as the output plan's item A10 draws it: a titled label grid, then the closing lines. A row
+        wraps under its own label, so a phrase split by the wrap is still read, and a row that ends in a number
+        does not count the label of the row after it."""
+        grid = ["│   osv-scanner checked 1 package in 1 lock file   │", "",
+                "⛨ Supply chain",
+                "  secrets       none in source files (secrets.json) · at HEAD 18 places, 1",
+                "                places high confidence",
+                "  dependencies  1 packages in 1 lock file, database 2026-09-30 · 1",
+                "                lock files held 1",
+                "  secrets       a second row whose label follows a row that ends in 1",
+                "",
+                "--full adds 1 section: Timeline. 15 of 18 steps ran; --plots runs the other 1",
+                "steps.", "/tmp/out"]
+        self.assertEqual(sorted(c["subject"] for c in self.complaints(grid)), ["'1 lock files' (1x)", "'1 packages' (1x)", "'1 places' (1x)", "'1 steps' (1x)"])
+        self.assertEqual(self.complaints(["Supply chain", "  signing       1", "  dependencies  none vulnerable"]), [], "the title without a pictogram, and no closing lines")
+        old = ["Secrets: none found", "Dependencies: 1 ", "packages in 1 lock file, none vulnerable"]
+        self.assertEqual([c["subject"] for c in self.complaints(old)], ["'1 packages' (1x)"], "the drawing before A10 is read as it was")
+
+    def test_one_followed_by_a_plural_in_a_header_and_findings_without_their_boxes(self):
+        """The header and the Findings as the output plan's item A11 draws them: a title line over a label grid,
+        and a title line over entries that each start at column 1 with their mark. A phrase the wrap split is
+        still read, within a header row and within an entry; a header row that ends in a number does not count
+        the label of the row after it; and a table is still read a line at a time."""
+        bare = ["demo · branch main @ 296080c0",
+                "  history   21 commits · 2026-01-01 → 2026-09-01 · 1",
+                "            identities",
+                "  code      5,421 lines · Python · 23% surviving from 1",
+                "  commits   16% are fixes · 84 reverts",
+                "  left out  1 sweeping",
+                "            commits, not counted in churn",
+                "",
+                "Findings · 1 warning ▲ · 1 note ●",
+                "▲ Vulnerable dependencies",
+                "  osv-scanner checked 1",
+                "  packages in 1 lock file. By lock file:",
+                "    go.mod: 1",
+                "      places, no fix published",
+                "  ↳ Upgrade it first; it is in 1",
+                "    lock files.",
+                "● Bug magnets (not measured yet): 1",
+                "  files were fixed 3 or more times",
+                "",
+                "◎ Watch list · 1 of 1, ranked by changes × lines of code",
+                "  file  changes",
+                "  ─────────────",
+                "  a.py        1",
+                "  files hidden: none",
+                "",
+                "Supply chain",
+                "  secrets       none found"]
+        self.assertEqual(sorted(c["subject"] for c in self.complaints(bare)),
+                         ["'1 files' (1x)", "'1 identities' (1x)", "'1 lock files' (1x)", "'1 packages' (1x)", "'1 places' (1x)"])
+        fine = ["demo", "  history   1 commit · 1 identity · 1", "  files     1 tracked", "", "Findings · 1 note ●", "● One (not measured yet): 1",
+                "● files is the next entry's first word", "", "Nothing here is a table:", "  the count is 1", "  files in all"]
+        self.assertEqual(self.complaints(fine), [], "a row's last number, and an entry's, is not the next one's count; nor is a table line's")
+        boxed = ["╭─ demo ──╮", "│ history   1 │", "│ commits │", "╰─────────╯", "╭─ Findings ─╮", "│ ▲ checked 1 │", "│   packages  │", "╰────────────╯"]
+        self.assertEqual(sorted(c["subject"] for c in self.complaints(boxed)), ["'1 commits' (1x)", "'1 packages' (1x)"], "the boxes are read as they were")
 
     def complaints(self, lines):
         with mock.patch.object(consistency, "_default_report", return_value=lines):

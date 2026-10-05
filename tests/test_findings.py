@@ -338,6 +338,13 @@ class TightCoupling(unittest.TestCase):
         self.assertIn("a", f[0]["detail"])
         self.assertTrue(f[0]["detail"].endswith("Review a and b first: a shared layout or a hidden dependency links them."), f[0]["detail"])
 
+    def test_a_whole_list_is_not_introduced_as_an_example(self):
+        # prometheus: "1 pair changes together at least 80% of the time, e.g." and then its one pair
+        pairs = [{"entity": f"a{i}", "coupled": f"b{i}", "degree": 99 - i, "average-revs": 10} for i in range(4)]
+        self.assertIn("3 pairs change together at least 80% of the time: a0 + b0 (99%); a1 + b1 (98%); a2 + b2 (97%).", findings.tight_coupling(report(coupling=pairs[:3]))[0]["detail"])
+        self.assertIn("1 pair changes together at least 80% of the time: a0 + b0 (99%).", findings.tight_coupling(report(coupling=pairs[:1]))[0]["detail"])
+        self.assertIn("4 pairs change together at least 80% of the time, e.g. a0 + b0 (99%); a1 + b1 (98%); a2 + b2 (97%).", findings.tight_coupling(report(coupling=pairs))[0]["detail"])
+
     def test_a_file_and_its_test_are_expected_to_change_together(self):
         pairs = [{"entity": "gitmole/maat.py", "coupled": "tests/test_maat.py", "degree": 100, "average-revs": 16},
                  {"entity": "src/a.js", "coupled": "src/a.test.js", "degree": 100, "average-revs": 9}]
@@ -534,7 +541,7 @@ class BugMagnets(unittest.TestCase):
         r = report(fixes=fixes, fix_history=history)
         r["meta"]["now"] = "2026-09-17"
         f = findings.bug_magnets(r)[0]
-        self.assertIn("5 file(s) were fixed 3+ times in six months: core/parser.py (5 recent, 9 total); "
+        self.assertIn("5 files were fixed 3 or more times in 6 months: core/parser.py (5 recent, 9 total); "
                       "plug/tasks/user.go (5 recent, 5 total) and 2 files beside it fixed in the same commits; "
                       "plug/tasks/helper.go (4 recent, 4 total).", f["detail"], "created seven months before now: not new in the window")
         self.assertIn("Review core/parser.py and plug/tasks/user.go before the next release", f["advice"])
@@ -570,7 +577,7 @@ class BugMagnets(unittest.TestCase):
                                 "core/util.py": {"first": "2026-04-10", "recent": ["f", "g", "h"]}})
         r["meta"].update({"now": "2026-09-17", "first_date": "2026-04-10"})
         f = findings.bug_magnets(r)[0]
-        self.assertIn("fixed 3+ times in six months: core/parser.py (5 recent); core/util.py (3 recent).", f["detail"])
+        self.assertIn("fixed 3 or more times in 6 months: core/parser.py (5 recent); core/util.py (3 recent).", f["detail"])
         self.assertNotIn("new_in_window", f["evidence"])
 
     def test_without_the_commits_every_file_stands_alone(self):
@@ -605,7 +612,7 @@ class BugMagnets(unittest.TestCase):
         self.assertEqual((prone["fixes"], prone["changes"], prone["files"]), (42, 408, 99))
         self.assertEqual(prone["above"], {"src/prone.py"}, "12 of 14 against 42 of 408; 30 of 200 is about the rate")
         f = findings.bug_magnets(r)[0]
-        self.assertIn("2 file(s) were fixed 3+ times in six months, 1 beyond files of their size: "
+        self.assertIn("2 files were fixed 3 or more times in 6 months, 1 more often than is usual for its size: "
                       "src/prone.py (4 recent, 12 total); src/busy.py (9 recent, 30 total).", f["detail"])
         self.assertIn("Review src/prone.py and src/busy.py before the next release.", f["advice"])
         self.assertEqual(f["severity"], "warning", "severity stays the window's: busy.py has 9 recent fixes")
@@ -617,8 +624,22 @@ class BugMagnets(unittest.TestCase):
     def test_says_so_when_none_is_fixed_beyond_the_rate(self):
         r = self.rated([("src/busy.py", 30, 9), ("src/lib.py", 20, 0)], {"src/busy.py": 300, "src/lib.py": 100})
         f = findings.bug_magnets(r)[0]   # 30 of 300 against 50 of 494
-        self.assertIn("1 file(s) were fixed 3+ times in six months, none beyond files of their size: src/busy.py", f["detail"])
+        self.assertIn("1 file was fixed 3 or more times in 6 months, no file more often than is usual for its size: src/busy.py", f["detail"])
         self.assertEqual(f["evidence"]["fix_rate"]["above_rate"], [])
+
+    def test_is_a_note_when_none_is_fixed_beyond_the_rate(self):
+        """prometheus: a warning whose own sentence said "none beyond files of their size". Nine recent fixes
+        are over warn_at, and the test ran: with nothing above the rate the finding says nothing is unusual."""
+        r = self.rated([("src/busy.py", 30, 9), ("src/lib.py", 20, 0)], {"src/busy.py": 300, "src/lib.py": 100})
+        f = findings.bug_magnets(r)[0]
+        self.assertEqual(f["evidence"]["fix_rate"]["above_rate"], [])
+        self.assertEqual(f["severity"], "info")
+
+    def test_stays_a_warning_when_the_test_could_not_run(self):
+        """No revisions, so no rate to hold the files against: an empty list is the test's answer, a missing one is not."""
+        f = findings.bug_magnets(report(fixes=self.FIXES))[0]
+        self.assertNotIn("fix_rate", f["evidence"])
+        self.assertEqual(f["severity"], "warning")
 
     def test_a_large_file_is_tested_against_files_of_its_size(self):
         """hindsight at 0.40.0: all 13 files the whole-repository rate named were in the top tenth by lines of code.
@@ -634,7 +655,7 @@ class BugMagnets(unittest.TestCase):
         self.assertEqual(prone["above"], {"src/worst.py"})
         self.assertAlmostEqual(prone["rate"]["src/big0.py"], (9 * 12 + 30) / 400)
         f = findings.bug_magnets(r)[0]
-        self.assertIn("10 file(s) were fixed 3+ times in six months, 1 beyond files of their size: src/worst.py", f["detail"])
+        self.assertIn("10 files were fixed 3 or more times in 6 months, 1 more often than is usual for its size: src/worst.py", f["detail"])
 
     def test_no_rate_test_on_a_history_barely_longer_than_the_window(self):
         """hindsight: eleven months of history, the six-month window most of it."""
@@ -642,7 +663,7 @@ class BugMagnets(unittest.TestCase):
         r["meta"] = dict(r["meta"], first_date="2025-10-30", last_date="2026-09-30")
         self.assertIsNone(findings.fix_prone(r, lambda p: True))
         f = findings.bug_magnets(r)[0]
-        self.assertIn("2 file(s) were fixed 3+ times in six months: src/busy.py", f["detail"])
+        self.assertIn("2 files were fixed 3 or more times in 6 months: src/busy.py", f["detail"])
         # paperclip review (D6): the test that did not run was advertised and never mentioned, and 391 raw counts were a warning
         self.assertIn("Raw counts: the test against files of their size needs 12 months of history, this has 11.", f["detail"])
         self.assertEqual(f["evidence"]["fix_rate"], {"not_run": "history too short", "history_months": 11})
@@ -784,7 +805,7 @@ class BrainMethods(unittest.TestCase):
         fns = [{"file": "server/heartbeat.ts", "function": "executeRun", "ccn": 55, "nloc": 6394, "params": 2, "start": 20179, "end": 26572,
                 "suspect": "", "lizard_span": {"end": 20446, "nloc": 222}}]
         f = findings.brain_methods(report(functions=fns))
-        self.assertIn("executeRun (server/heartbeat.ts) complexity at least 55, 6394 lines, 2 params", f[0]["detail"])
+        self.assertIn("executeRun (server/heartbeat.ts) complexity at least 55, 6,394 lines, 2 params", f[0]["detail"])
         self.assertEqual(f[0]["evidence"]["functions"][0]["lines"], 6394)
 
     def test_generated_files_are_not_brain_methods(self):
@@ -849,17 +870,44 @@ class VulnerableDependencies(unittest.TestCase):
         r = report(dependencies=self.deps([self.row("lodash", "4.17.15", "frontend/yarn.lock", score=7.2, fixed="4.17.21")]))
         [f] = findings.vulnerable_dependencies(r)
         self.assertEqual((f["severity"], f["title"]), ("warning", "Vulnerable dependencies"))
-        self.assertIn("1 vulnerable package in 1 lock file: lodash 4.17.15 (CVE-2024-1, 7.2, fixed in 4.17.21) in frontend/yarn.lock.", f["detail"])
-        self.assertEqual(f["advice"], "Upgrade lodash to 4.17.21 in frontend/yarn.lock first; it scores 7.2. " + findings.IGNORE_DEPS)
+        self.assertIn("1 vulnerable package in 1 lock file: lodash 4.17.15 (CVE-2024-1, CVSS 7.2, fixed in 4.17.21) in frontend/yarn.lock.", f["detail"])
+        self.assertEqual(f["advice"], "Upgrade lodash to 4.17.21 in frontend/yarn.lock first; it scores CVSS 7.2. " + findings.IGNORE_DEPS)
         self.assertIn("CVE-2024-1", f["evidence"]["packages"][0]["aliases"], "the identifier the sentence quotes is in the evidence too")
 
     def test_a_critical_score_makes_it_critical_and_the_worst_leads(self):
         rows = [self.row("minimist", "0.0.8", "package-lock.json", score=9.8, fixed="1.2.6"), self.row("lodash", "4.17.15", "package-lock.json", score=7.2)]
         [f] = findings.vulnerable_dependencies(report(dependencies=self.deps(rows), tree=frozenset({"Dockerfile", "package-lock.json"})))
         self.assertEqual(f["severity"], "critical")
-        self.assertTrue(f["advice"].startswith("Upgrade minimist to 1.2.6 in package-lock.json first; it scores 9.8, and Dockerfile ships that lock."), f["advice"])
+        self.assertTrue(f["advice"].startswith("Upgrade minimist to 1.2.6 in package-lock.json first; it scores CVSS 9.8, and Dockerfile ships that lock."), f["advice"])
         self.assertIn("2 vulnerable packages in 1 lock file", f["detail"])
         self.assertEqual(f["evidence"]["packages"][0]["deploys"], ["Dockerfile"])
+
+    def test_the_advice_names_the_highest_score_that_has_a_fix(self):
+        """prometheus: the advice named its own module at 7.5, imported and so first by reach, while
+        websocket-driver at 9.2 with a fix published was named nowhere."""
+        rows = [{**self.row("own/module", "0.3.0", "go.mod", score=7.5, fixed="0.3.1"), "imported": True},
+                {**self.row("websocket-driver", "0.7.4", "pnpm-lock.yaml", score=9.2, fixed="0.7.5"), "imported": False},
+                {**self.row("nofix", "1.0.0", "pnpm-lock.yaml", score=9.6, fixed=None), "imported": False}]
+        [f] = findings.vulnerable_dependencies(report(dependencies=self.deps(rows)))
+        self.assertEqual(f["severity"], "warning")
+        self.assertEqual(f["advice"], "Upgrade websocket-driver to 0.7.5 in pnpm-lock.yaml first; it scores CVSS 9.2, the highest with a fix published. " + findings.IGNORE_DEPS)
+        self.assertEqual(f["evidence"]["packages"][0]["name"], "own/module", "the rows, and the sentence over them, keep their order")
+
+    def test_the_advice_gives_no_reason_it_does_not_have(self):
+        one = [self.row("lodash", "4.17.15", "yarn.lock", score=7.2, fixed="4.17.21")]
+        self.assertIn("first; it scores CVSS 7.2. ", findings.vulnerable_dependencies(report(dependencies=self.deps(one)))[0]["advice"], "nothing to be the highest of")
+        none = [self.row("a", "1.0.0", "yarn.lock", score=8.0, fixed=None), self.row("b", "1.0.0", "yarn.lock", score=6.0, fixed=None)]
+        self.assertTrue(findings.vulnerable_dependencies(report(dependencies=self.deps(none)))[0]["advice"]
+                        .startswith("Look at a in yarn.lock first, which has no fixed version yet; it scores CVSS 8.0. "))
+
+    def test_a_malicious_package_and_a_shipped_critical_still_lead_the_advice(self):
+        rows = [self.row("lodash", "4.17.15", "package-lock.json", score=9.9, fixed="4.17.21"),
+                self.row("evil", "1.0.0", "package-lock.json", score=None, fixed=None, ids=("MAL-2026-1",), malicious=True)]
+        [f] = findings.vulnerable_dependencies(report(dependencies=self.deps(rows)))
+        self.assertTrue(f["advice"].startswith("Remove evil 1.0.0 from package-lock.json first"), f["advice"])
+        rows = [self.row("shipped", "1.0.0", "package-lock.json", score=9.1, fixed="1.0.1"), self.row("dev", "1.0.0", "tools/package-lock.json", score=9.8, fixed="1.0.1")]
+        [f] = findings.vulnerable_dependencies(report(dependencies=self.deps(rows), tree=frozenset({"Dockerfile", "package-lock.json", "tools/package-lock.json"})))
+        self.assertTrue(f["advice"].startswith("Upgrade shipped to 1.0.1 in package-lock.json first; it scores CVSS 9.1, and Dockerfile ships that lock."), f["advice"])
 
     def test_a_critical_score_in_a_lock_nothing_declares_it_ships_is_a_warning(self):
         """hindsight: the headline was chromadb in an integration library's development lock, not the shipped
@@ -914,7 +962,7 @@ class VulnerableDependencies(unittest.TestCase):
         self.assertEqual([f["severity"] for f in found], ["warning", "info"])
         self.assertIn("only in test, example or vendored lock files", found[1]["title"])
         self.assertIn("b 1 (GHSA-x, no fix yet) in examples/demo/Cargo.lock", found[1]["detail"])
-        self.assertIn("a 1 (CVE-2024-1, 9.8, fixed in 9.9.9) in tests/e2e/yarn.lock", found[1]["detail"])
+        self.assertIn("a 1 (CVE-2024-1, CVSS 9.8, fixed in 9.9.9) in tests/e2e/yarn.lock", found[1]["detail"])
 
     def test_no_fix_yet_changes_the_advice(self):
         [f] = findings.vulnerable_dependencies(report(dependencies=self.deps([self.row("x", "1", "go.sum", score=None, fixed=None)])))
@@ -924,7 +972,7 @@ class VulnerableDependencies(unittest.TestCase):
     def test_more_than_three_are_counted(self):
         rows = [self.row(f"p{i}", "1", "package-lock.json", score=5.0) for i in range(5)]
         [f] = findings.vulnerable_dependencies(report(dependencies=self.deps(rows)))
-        self.assertIn("p2 1 (CVE-2024-1, 5.0, fixed in 9.9.9) in package-lock.json and 2 more.", f["detail"])
+        self.assertIn("p2 1 (CVE-2024-1, CVSS 5.0, fixed in 9.9.9) in package-lock.json and 2 more.", f["detail"])
 
     def test_a_requirement_range_is_said_as_a_range_and_kept_out_of_the_installed_rows(self):
         """hindsight: `mcp>=1.0.0` was reported as "mcp 1.0.0" in a "lock file"; the floor is what osv-scanner
@@ -933,8 +981,8 @@ class VulnerableDependencies(unittest.TestCase):
         pin = {**self.row("requests", "2.31.0", "tools/requirements.txt", score=5.6, fixed="2.32.0"), "requirement": "==2.31.0", "pinned": True}
         [f] = findings.vulnerable_dependencies(report(dependencies=self.deps([floor, pin])))   # one group, wherever requirement files are filed
         self.assertNotEqual(f["severity"], "critical", "a vulnerable floor is not an installed critical")
-        self.assertIn("1 vulnerable package in 1 requirement file: requests 2.31.0 (CVE-2024-1, 5.6, fixed in 2.32.0) in tools/requirements.txt.", f["detail"])
-        self.assertIn("1 requirement range admits a vulnerable version: mcp>=1.0.0 in tools/requirements.txt, whose floor 1.0.0 is vulnerable (CVE-2024-1, 9.1, fixed in 1.9.4).", f["detail"])
+        self.assertIn("1 vulnerable package in 1 requirement file: requests 2.31.0 (CVE-2024-1, CVSS 5.6, fixed in 2.32.0) in tools/requirements.txt.", f["detail"])
+        self.assertIn("1 requirement range admits a vulnerable version: mcp>=1.0.0 in tools/requirements.txt, whose floor 1.0.0 is vulnerable (CVE-2024-1, CVSS 9.1, fixed in 1.9.4).", f["detail"])
         self.assertEqual([p["name"] for p in f["evidence"]["packages"]], ["requests"])
         self.assertEqual(f["evidence"]["lock_files"], 0, "a requirement file is not a lock file")
         self.assertEqual(f["evidence"]["requirements"][0]["floor"], "1.0.0")
@@ -946,14 +994,14 @@ class VulnerableDependencies(unittest.TestCase):
         old = self.row("mcp", "1.0.0", "requirements.txt", score=8.7, fixed="1.9.4")   # a scan from before the specifier was kept
         [f] = findings.vulnerable_dependencies(report(dependencies=self.deps([old])))
         self.assertIn("mcp 1.0.0 in requirements.txt, a requirement file that may name only the lowest version it admits", f["detail"])
-        self.assertTrue(f["advice"].startswith("Raise the floor of mcp to 1.9.4 in requirements.txt first; its floor scores 8.7."), f["advice"])
+        self.assertTrue(f["advice"].startswith("Raise the floor of mcp to 1.9.4 in requirements.txt first; its floor scores CVSS 8.7."), f["advice"])
         self.assertEqual(f["evidence"]["packages"], [])
 
     def test_a_package_in_many_lock_files_is_counted_once_and_its_places_apart(self):
         """hindsight said "34 vulnerable packages": 34 rows of package and lock file, about 20 packages."""
         rows = [self.row("pyjwt", "2.13.0", f"{d}/uv.lock", score=7.1) for d in ("a", "b", "c")] + [self.row("click", "8.1.8", "a/uv.lock", score=7.0)]
         [f] = findings.vulnerable_dependencies(report(dependencies=self.deps(rows)))
-        self.assertIn("2 vulnerable packages in 4 places across 3 lock files: pyjwt 2.13.0 (CVE-2024-1, 7.1, fixed in 9.9.9) in a/uv.lock and 2 more files; click 8.1.8", f["detail"])
+        self.assertIn("2 vulnerable packages in 4 places across 3 lock files: pyjwt 2.13.0 (CVE-2024-1, CVSS 7.1, fixed in 9.9.9) in a/uv.lock and 2 more files; click 8.1.8", f["detail"])
         self.assertEqual((f["evidence"]["names"], f["evidence"]["places"], f["evidence"]["lock_files"]), (2, 4, 3))
         self.assertEqual(len(f["evidence"]["packages"]), 4, "the evidence keeps a row per place")
 
@@ -1192,6 +1240,28 @@ class Evaluate(unittest.TestCase):
         sev = [f["severity"] for f in findings.evaluate(r)]
         self.assertEqual(sev, sorted(sev, key=["critical", "warning", "info"].index))
         self.assertEqual(sev[0], "critical")
+
+    def test_within_a_severity_a_finding_by_name_alone_comes_after_the_measured_ones(self):
+        """prometheus: the report opened on a .env the secrets scan found no value in, ahead of 28 vulnerable
+        packages. credential_files runs before the dependency rule, so only the tie-break can put it after."""
+        row = {"name": "lodash", "version": "4.17.15", "ecosystem": "npm", "source": "yarn.lock", "ids": ["GHSA-x"], "aliases": ["CVE-2024-1"],
+               "advisories": 1, "score": 7.2, "severity": "high", "summary": "", "fixed": "4.17.21", "malicious": False}
+        r = report(meta={"credential_files": [".env"]},
+                   dependencies={"status": "scanned", "sources": [{"path": "yarn.lock", "packages": 10}], "packages": 10, "vulnerable": [row], "database_date": "2026-09-17"})
+        found = findings.evaluate(r)
+        ids = [f["rule"]["id"] for f in found]
+        self.assertEqual([f["severity"] for f in found if f["rule"]["id"] in ("credential_files", "vulnerable_dependencies")], ["warning", "warning"])
+        self.assertLess(ids.index("vulnerable_dependencies"), ids.index("credential_files"))
+        sev = [f["severity"] for f in found]
+        self.assertEqual(sev, sorted(sev, key=findings.SEVERITIES.index), "severity stays the first key")
+
+    def test_the_tie_break_reads_what_the_rule_declares_not_which_rule_it_is(self):
+        f = {"severity": "warning", "rule": {"id": "anything", "by": "file name"}}
+        g = {"severity": "warning", "rule": {"id": "anything_else"}}
+        h = {"severity": "info", "rule": {"id": "a_note"}}
+        c = {"severity": "critical", "rule": {"id": "named", "by": "path convention"}}
+        self.assertEqual(sorted([h, f, g, c], key=findings.order_key), [c, g, f, h])
+        self.assertIn(findings.credential_files(report(meta={"credential_files": [".env"]}))[0]["rule"]["by"], findings.BY_NAME_ALONE)
 
 
 if __name__ == "__main__":
@@ -1794,7 +1864,8 @@ class TruckFactor(unittest.TestCase):
         f = {x["rule"]["id"]: x for x in findings.evaluate(self.rep(doa, theseus_authors={"Ann": 50, "Bob": 50}))}["truck_factor"]
         self.assertEqual(f["advice"], "Those named are gone, and the 2 people still here who author the most files author equally many; "
                                       "give the files owners, starting with the ones changed most.")
-        self.assertIn("The surviving code's largest share, 50%, is held by 2 people equally, which the bus-factor finding reads.", f["detail"])
+        self.assertNotIn("surviving code", f["detail"], "the largest share's holder changed with --plots, and no bus-factor finding need exist to read it (prometheus)")
+        self.assertNotIn("bus-factor finding", f["detail"])
 
     def test_the_area_named_in_the_advice_is_the_named_persons_own(self):
         doa = [self.row(f"a{i}.py", "Ann") for i in range(20)] + [self.row(f"core/b{i}.py", "Bob") for i in range(10)]
@@ -1834,7 +1905,7 @@ class TruckFactor(unittest.TestCase):
         f = {x["rule"]["id"]: x for x in findings.evaluate(self.rep(doa))}["truck_factor"]
         self.assertIn("Truck factor 1: without Ann", f["detail"])
         self.assertNotIn("()", f["detail"])
-        self.assertIn("With knowledge halving every five months, more than half the files already have no author", f["detail"])
+        self.assertIn("With knowledge halving every 5 months, more than half the files already have no author", f["detail"])
         self.assertEqual(f["evidence"]["truck_factor_decayed"], 0)
 
 
@@ -1953,7 +2024,7 @@ class OneOwner(unittest.TestCase):
         self.assertEqual(f["evidence"]["measures"]["truck_factor"]["truck_factor"], 1)
         self.assertEqual(f["evidence"]["measures"]["knowledge_islands"]["owners"], ["Ann"])
         self.assertIn("Ann wrote 90% of the code that survives today. Without them, 30 of the 38 source files (79%) have no author left (truck factor 1)", f["detail"])
-        self.assertIn("2 area(s) of at least 200 lines are almost entirely theirs", f["detail"])
+        self.assertIn("2 areas of at least 200 lines are almost entirely theirs", f["detail"])
         self.assertIn("(knowledge islands)", f["detail"])
         self.assertEqual(f["advice"], "Pair someone with Ann on core/ first; 20 of its 20 files would have no author left without them.",
                          "the start area is the one with the most files at stake")

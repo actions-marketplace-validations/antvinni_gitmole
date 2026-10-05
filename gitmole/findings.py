@@ -53,8 +53,8 @@ def _plural(n: int, word: str) -> str:
     """A count and its noun, agreeing. A noun already ending in a sibilant takes -es: appending -s to
     "IPv4 address" is what gave ghidra's report "2 IPv4 addresss"."""
     if n == 1:
-        return f"{n} {word}"
-    return f"{n} {word}es" if _SIBILANT.search(word) else f"{n} {word}s"
+        return f"{n:,} {word}"
+    return f"{n:,} {word}es" if _SIBILANT.search(word) else f"{n:,} {word}s"
 
 
 SECRETS_NAMED = 3       # values a secrets finding names, past which it says "and N more"
@@ -76,7 +76,7 @@ def _secret_statement(groups: list, declared: bool = False, every: int = SECRETS
         others = len(g["files"]) - 1
         where = g["files"][0] + (f" and {_plural(others, 'other file')}" if others else "")
         named = [c for c in g["commits"] if c]     # an unreachable blob is in no commit
-        commits = ", ".join(named[:2]) + (f" and {len(named) - 2} more" if len(named) > 2 else "")
+        commits = ", ".join(named[:2]) + (f" and {len(named) - 2:,} more" if len(named) > 2 else "")
         said = g.get("declared") if declared else None
         told = f", declared allowed in {said['file']} at {said['commit']}" if said else ""
         return f"{g['rule']} in {where}" + (f" ({commits}{told})" if commits else f" ({told[2:]})" if told else "")
@@ -85,8 +85,8 @@ def _secret_statement(groups: list, declared: bool = False, every: int = SECRETS
     counts = {}                                    # insertion order, so the first named stay in their order
     for text in (one(g) for g in groups[:named]):
         counts[text] = counts.get(text, 0) + 1
-    sample = "; ".join(f"{n} values of {text}" if n > 1 else text for text, n in counts.items())
-    more = f" and {len(groups) - named} more" if len(groups) > named else ""
+    sample = "; ".join(f"{n:,} values of {text}" if n > 1 else text for text, n in counts.items())
+    more = f" and {len(groups) - named:,} more" if len(groups) > named else ""
     return f"{_plural(len(groups), 'distinct value')} in {_plural(places, 'place')}: {sample}{more}."
 
 
@@ -213,7 +213,7 @@ def credential_files(report: dict) -> list:
     paths = (report.get("meta") or {}).get("credential_files") or []
     if not paths:
         return []
-    shown = ", ".join(paths[:5]) + (f" and {len(paths) - 5} more" if len(paths) > 5 else "")
+    shown = ", ".join(paths[:5]) + (f" and {len(paths) - 5:,} more" if len(paths) > 5 else "")
     return [_f("warning", "Credential-shaped files tracked", f"{_plural(len(paths), 'credential-shaped file')} tracked: {shown}.",
                "Move the values to the environment, git rm the files and add them to .gitignore; a template belongs in .env.example.",
                rule={"id": "credential_files", "by": "file name"}, evidence={"count": len(paths), "files": paths[:10]})]
@@ -359,13 +359,19 @@ def at_head(report: dict, path: str):
     return path in tree or any(p.startswith(prefix) for p in tree)
 
 
+def sweeps(report: dict) -> list:
+    """The sweeping commits sweeping_commits names, every one of them: the finding's evidence holds the first
+    ten, and the default report's short form (brief.py) counts them all and names the largest."""
+    return [c for c in (report.get("activity") or {}).get("sweeping") or [] if not c.get("declared")]
+
+
 def sweeping_commits(report: dict) -> list:
     """The commits the change analysis left out as sweeps (a formatter run, a rename across the tree:
     over the repository's 99th percentile of files touched, with as many lines out as in) that the
     repository has not declared in .git-blame-ignore-revs. Declaring them makes git blame and GitHub
     skip them too, which is the repository's own mechanism for exactly this."""
     act = report.get("activity") or {}
-    swept = [c for c in act.get("sweeping") or [] if not c.get("declared")]
+    swept = sweeps(report)
     if not swept:
         return []
     declared = act.get("ignored_revs") or 0
@@ -373,7 +379,7 @@ def sweeping_commits(report: dict) -> list:
     def one(c):
         subject = f", {textfmt.cut(c['subject'], 60)}" if c.get("subject") else ""
         return f"{c['hash']} ({c['files']:,} files, {c['date']}{subject})"
-    listed = "; ".join(one(c) for c in swept[:3]) + (f" and {len(swept) - 3} more" if len(swept) > 3 else "")
+    listed = "; ".join(one(c) for c in swept[:3]) + (f" and {len(swept) - 3:,} more" if len(swept) > 3 else "")
     least = min(c["files"] for c in swept)
     statement = (f"{_plural(len(swept), 'commit')} each touch {least:,} files or more and take out as many lines as they put in: {listed}. "
                  "They are left out of the churn, coupling and ownership counts.")
@@ -403,7 +409,7 @@ def imports_gone_note(report: dict):
         where = f" under {c['under']}" if c.get("under") else ""
         rm = c.get("removed_in")
         return f"{c['hash']}, {c['files']:,} code file{'s' if c['files'] != 1 else ''}{where}" + (f", removed in {rm['hash']}" if rm else "")
-    listed = "; ".join(one(c) for c in gone[:3]) + (f" and {len(gone) - 3} more" if len(gone) > 3 else "")
+    listed = "; ".join(one(c) for c in gone[:3]) + (f" and {len(gone) - 3:,} more" if len(gone) > 3 else "")
     return f"{_plural(len(gone), 'import')} left out of ownership ({listed}): nothing of {'it' if len(gone) == 1 else 'them'} is in the tree"
 
 
@@ -463,7 +469,7 @@ def tangled_commits(report: dict, min_share: float = 0.02, min_count: int = 5) -
 
     def one(c):
         return f"{c['hash']} ({c['files']:,} files, {c['dirs']} directories, {textfmt.cut(c['subject'], 70)})"
-    sample = "; ".join(one(c) for c in listed[:3]) + (f" and {count - 3} more" if count > 3 and len(listed) >= 3 else "")
+    sample = "; ".join(one(c) for c in listed[:3]) + (f" and {count - 3:,} more" if count > 3 and len(listed) >= 3 else "")
     aside = (f", so {big} {'fix' if big == 1 else 'fixes'} over the repository's 99th percentile of lines changed {'is' if big == 1 else 'are'} already left out of the fix counts"
              if big else "")
     return [_f("info", "Tangled commits",
@@ -514,17 +520,18 @@ def tight_coupling(report: dict, min_degree: int = 80, min_revs: int = 5) -> lis
     top = "; ".join(f"{p['entity']} + {p['coupled']} ({p['degree']}%)" for p in pairs[:3])
     if groups:
         # a directory of files that change as one is a generator or a shared layout, said once
-        named = ", ".join(f"{g['files']} files in {g['dir']}" for g in groups[:2]) + (f" and {len(groups) - 2} more directories" if len(groups) > 2 else "")
+        named = ", ".join(f"{g['files']:,} files in {g['dir']}" for g in groups[:2]) + (f" and {len(groups) - 2:,} more directories" if len(groups) > 2 else "")
         rest = (f", and {_plural(len(pairs), 'more pair')} {'does' if len(pairs) == 1 else 'do'}: {top}." if pairs
                 else f", {_plural(sum(g['pairs'] for g in groups), 'pair')} in all.")
         first = groups[0]
         return [_f("info", "Files that always change together", f"{named} change {when}{rest}",
-                   f"Review {first['dir']} first: {first['files']} files change as one; a generator or a shared layout links them.",
+                   f"Review {first['dir']} first: {first['files']:,} files change as one; a generator or a shared layout links them.",
                    rule=rule, evidence=evidence)]
-    count = f"{len(pairs)} pair changes" if len(pairs) == 1 else f"{len(pairs)} pairs change"
+    count = f"{len(pairs):,} pair changes" if len(pairs) == 1 else f"{len(pairs):,} pairs change"
     first = pairs[0]
+    # three pairs or fewer are all of them, and "e.g." before a whole list says there are more (prometheus: 1 pair, "e.g." its one)
     return [_f("info", "Files that always change together",
-               f"{count} {when}, e.g. {top}.",
+               f"{count} {when}{': ' if len(pairs) <= 3 else ', e.g. '}{top}.",
                f"Review {first['entity']} and {first['coupled']} first: a shared layout or a hidden dependency links them.",
                rule=rule, evidence=evidence)]
 
@@ -586,7 +593,7 @@ def _magnet_items(hot: list, history: dict, now: str, since: str = None) -> list
         done.update(g["entity"] for g in members)
         fresh = [m["entity"] for m in (f, *members) if new(m)]
         # a file new in the window has had every fix inside it, so its total would only repeat the recent count
-        counts = [f"{f['recent-fixes']} recent"] + ([] if (whole or new(f)) and f["n-fixes"] == f["recent-fixes"] else [f"{f['n-fixes']} total"])
+        counts = [f"{f['recent-fixes']:,} recent"] + ([] if (whole or new(f)) and f["n-fixes"] == f["recent-fixes"] else [f"{f['n-fixes']:,} total"])
         text = f"{lead} ({', '.join(counts + (['new in the window'] if new(f) else []))})"
         if members:
             beside = all(g["entity"].rpartition("/")[0] == lead.rpartition("/")[0] for g in members)
@@ -713,8 +720,12 @@ def bug_magnets(report: dict, min_recent: int = 3, warn_at: int = 5) -> list:
     A file whose recent fixes all fixed a file above it too is listed with that file (see _magnet_items).
     Most magnets are busy files in a repository that fixes a lot, so the finding names first the ones
     fixed more often than the repository's own fixes explain (see fix_prone), says how many of all
-    there are, and says so when there are none. Which files are magnets, and the severity, stay the
-    window's counts: the test annotates and orders. When the history is too short for the test
+    there are, and says so when there are none. Which files are magnets stays the window's counts: the
+    test annotates and orders. It decides one thing: when it ran and put no file above the rate of the
+    files of its size, the finding is a note, since its own sentence then says nothing here is unusual
+    (prometheus: a warning reading "18 files ..., none beyond files of their size", which now reads "no file
+    more often than is usual for its size": "beyond files" compared a count with files). With a file above
+    the rate, or no test to ask, the severity is the window's. When the history is too short for the test
     (FIX_RATE_MIN_MONTHS), the finding says so and is a note: the counts are then raw, and raw fix counts
     mostly rank files by size (paperclip, 7.5 months: 391 magnets, Spearman 0.56 with lines of code, the
     top ten all among the largest files), which is not a warning's worth of evidence."""
@@ -726,23 +737,25 @@ def bug_magnets(report: dict, min_recent: int = 3, warn_at: int = 5) -> list:
     hot.sort(key=lambda f: (-f["recent-fixes"], -f["n-fixes"], f["entity"]))
     months = _history_months(report)
     short = months is not None and months < FIX_RATE_MIN_MONTHS
-    sev = "warning" if hot[0]["recent-fixes"] >= warn_at and not short else "info"
     prone = fix_prone(report, keep)
     above = [f for f in hot if f["entity"] in prone["above"]] if prone else []
+    usual = prone is not None and not above   # the test ran and named none of them
+    sev = "warning" if hot[0]["recent-fixes"] >= warn_at and not short and not usual else "info"
     history = report.get("fix_history") or {}
     order = sorted(hot, key=lambda f: f["entity"] not in prone["above"]) if prone else hot   # stable: the window's order within each
     items = _magnet_items(order, history, report["meta"].get("now") or _dt.date.today().isoformat(), report["meta"].get("first_date"))
     listed = "; ".join(text for _, text, _, _ in items[:5])
     more = len(hot) - sum(len(paths) for paths, _, _, _ in items[:5])
-    more = f" and {more} more" if more > 0 else ""
+    more = f" and {more:,} more" if more > 0 else ""
     first = " and ".join(label for _, _, label, _ in items[:2])
     clusters = [{"file": paths[0], "with": paths[1:], "fixes": history[paths[0]]["recent"]} for paths, _, _, _ in items if len(paths) > 1]
     fresh = [p for _, _, _, new in items for p in new]
-    rate = "" if prone is None else f", {len(above) or 'none'} beyond files of their size"
+    rate = ("" if prone is None else ", no file more often than is usual for its size" if not above
+            else f", {len(above):,} more often than is usual for {'its' if len(above) == 1 else 'their'} size")
     untested = (f" Raw counts: the test against files of their size needs {FIX_RATE_MIN_MONTHS} months of history, "
-                f"this has {months or 'less than one'}.") if short else ""
+                f"this has {months or 'less than 1'}.") if short else ""
     return [_f(sev, "Bug magnets",
-               f"{len(hot)} file(s) were fixed {min_recent}+ times in six months{rate}: {listed}{more}.{untested}",
+               f"{_plural(len(hot), 'file')} {'was' if len(hot) == 1 else 'were'} fixed {min_recent} or more times in 6 months{rate}: {listed}{more}.{untested}",
                f"Review {first} before the next release.",
                rule={"id": "bug_magnets", "min_recent": min_recent, "warn_at": warn_at, "window_months": 6, "fix": "the commit subject says so",
                      "oversized": "a fix over the repository's 99th percentile of lines changed credits nothing",
@@ -771,7 +784,7 @@ def knowledge_islands(report: dict, min_lines: int = 200, min_share: float = 0.9
     sev = "warning" if total and covered / total > 0.5 else "info"
     gone = _gone(report)
     listed = "; ".join(f"{i['area']} ({_who(i['owner'], gone)} {i['share']}%)" for i in islands[:5])
-    more = f" and {len(islands) - 5} more" if len(islands) > 5 else ""
+    more = f" and {len(islands) - 5:,} more" if len(islands) > 5 else ""
     largest = max(islands, key=lambda i: i["lines"])
     at = f"it is the largest at {largest['lines']:,} lines"
     if largest["owner"] not in gone:
@@ -783,7 +796,7 @@ def knowledge_islands(report: dict, min_lines: int = 200, min_share: float = 0.9
                   else f"Give {largest['area']} an owner first; {at} and the {level} people still here who wrote the most of it wrote equally much." if level > 1
                   else f"Give {largest['area']} an owner first; {at} and nobody still here has written any of it.")
     return [_f(sev, "Knowledge islands",
-               f"{len(islands)} area(s) with at least {min_lines} lines were written almost entirely by one person: {listed}{more}. "
+               f"{_plural(len(islands), 'area')} with at least {min_lines} lines {'was' if len(islands) == 1 else 'were'} written almost entirely by one person: {listed}{more}. "
                f"That is {_pct(covered, total)} of all lines added.",
                advice,
                rule={"id": "knowledge_islands", "min_lines": min_lines, "min_share": min_share, "min_fraction": min_fraction},
@@ -824,13 +837,13 @@ def brain_methods(report: dict, min_ccn: int = 15, min_lines: int = 100) -> list
     big.sort(key=lambda f: (-f["ccn"], -f["nloc"], f["file"], f["function"], f["start"]))
     hot = hotspots.top(report)
     sev = "warning" if any(f["file"] in hot for f in big) else "info"
-    listed = "; ".join(f"{_called(f)} ({_place(f)}) complexity {'at least ' if f.get('lizard_span') else ''}{f['ccn']}, {f['nloc']} lines, "
+    listed = "; ".join(f"{_called(f)} ({_place(f)}) complexity {'at least ' if f.get('lizard_span') else ''}{f['ccn']:,}, {f['nloc']:,} lines, "
                        f"{_plural(f['params'], 'param')}" for f in big[:5])
-    more = f" and {len(big) - 5} more" if len(big) > 5 else ""
+    more = f" and {len(big) - 5:,} more" if len(big) > 5 else ""
     first = big[0]
     which = f"the anonymous function at {_place(first)}" if _anonymous(first) else f"{first['function']} in {first['file']}"
     return [_f(sev, "Brain methods",
-               f"{len(big)} function(s) are both long and complex: {listed}{more}.{_partial_functions(report)}",
+               f"{_plural(len(big), 'function')} {'is' if len(big) == 1 else 'are'} both long and complex: {listed}{more}.{_partial_functions(report)}",
                f"Split {which} first, before the next change lands there.",
                rule={"id": "brain_methods", "min_ccn": min_ccn, "min_lines": min_lines},
                evidence={"count": len(big), "partial": bool(_partial_functions(report)),
@@ -898,7 +911,7 @@ def complexity_growth(report: dict, min_growers: int = 3, min_pct: int = trend.G
 
     def code(c):
         return f", code {c:+d}%" if c is not None else ""
-    listed = ", ".join(f"{p} (+{g}%{code(c)})" for p, g, c, _ in grown[:5]) + (f" and {len(grown) - 5} more" if len(grown) > 5 else "")
+    listed = ", ".join(f"{p} (+{g}%{code(c)})" for p, g, c, _ in grown[:5]) + (f" and {len(grown) - 5:,} more" if len(grown) > 5 else "")
     split_floor = trend.GROWTH_FLOOR
     denser = next((x for x in grown if x[3] is not None and x[3] >= split_floor), None)
     if denser:
@@ -932,7 +945,7 @@ def _floating(r: dict) -> bool:
 
 def _vuln_ref(r: dict) -> str:
     ref = _malicious_id(r) or (r["aliases"][0] if r.get("aliases") else (r["ids"][0] if r.get("ids") else ""))
-    score = f", {r['score']:.1f}" if r.get("score") is not None else (f", {r['severity']}" if r.get("severity") not in (None, "unknown") else "")
+    score = f", CVSS {r['score']:.1f}" if r.get("score") is not None else (f", {r['severity']}" if r.get("severity") not in (None, "unknown") else "")
     if r.get("malicious"):
         score = ", malicious"
     fixed = f", fixed in {r['fixed']}" if r.get("fixed") else ", no fix yet"
@@ -954,9 +967,9 @@ def _vuln_statement(rows: list) -> str:
             versions.setdefault((r["name"], r["version"]), []).append(r)
         listed = "; ".join(f"{same[0]['name']} {same[0]['version']} ({_vuln_ref(same[0])}) in {same[0]['source']}"
                            + (f" and {_plural(len(same) - 1, 'more file')}" if len(same) > 1 else "") for same in list(versions.values())[:3])
-        more = f" and {len(versions) - 3} more" if len(versions) > 3 else ""
+        more = f" and {len(versions) - 3:,} more" if len(versions) > 3 else ""
         names = len({r["name"] for r in locked})
-        places = f" in {len(locked)} places across " if len(locked) != names else " in "
+        places = f" in {len(locked):,} places across " if len(locked) != names else " in "
         parts.append(f"{_plural(names, 'vulnerable package')}{places}{deps.files_phrase(r['source'] for r in locked)}: {listed}{more}.")
     if ranges:
         def one(r):
@@ -964,7 +977,7 @@ def _vuln_statement(rows: list) -> str:
                 return f"{r['name']} {r['version']} in {r['source']}, a requirement file that may name only the lowest version it admits ({_vuln_ref(r)})"
             return f"{r['name']}{r['requirement'] or ' (any version)'} in {r['source']}, whose floor {r['version']} is vulnerable ({_vuln_ref(r)})"
         listed = "; ".join(one(r) for r in ranges[:3])
-        more = f" and {len(ranges) - 3} more" if len(ranges) > 3 else ""
+        more = f" and {len(ranges) - 3:,} more" if len(ranges) > 3 else ""
         verb = "admits" if len(ranges) == 1 else "admit"
         parts.append(f"{_plural(len(ranges), 'requirement range')} {verb} a vulnerable version: {listed}{more}.")
     return " ".join(parts)
@@ -989,7 +1002,8 @@ def _vuln_rows(report: dict) -> list:
     a malicious package leading, then by reach (_vuln_reach: a version the lock installs for running that
     the source imports, then one it installs for running, then one only development dependencies reach),
     then the ones with a fixed version before the ones without, then by score. The grade does not move
-    with the reach. The finding and its SARIF results read the same rows."""
+    with the reach. The finding and its SARIF results read the same rows. The advice picks its own row
+    from them (_vuln_first)."""
     scan = report.get("dependencies") or {}
     rows = scan.get("vulnerable") or []
     if not rows:
@@ -1017,6 +1031,15 @@ def _vuln_rows(report: dict) -> list:
                                       -(r["score"] if r.get("score") is not None else -1), r["name"], r["source"]))
             out.append((rid, _vuln_severity(rid, group), title, group))
     return out
+
+
+def _vuln_first(rows: list) -> dict:
+    """The row the advice names: a malicious package, then one that makes the finding critical, then the
+    highest score among the rows with a fixed version, and the rows' own order between equals. Not the
+    first row: reach orders those, and prometheus was told to upgrade its own module at 7.5, imported and
+    so first, while a package at 9.2 with a fix published was named nowhere. A step is something to do,
+    so a row with a fix comes before a higher score that has none."""
+    return min(rows, key=lambda r: (not r.get("malicious"), not _vuln_critical(r), not r.get("fixed"), -(r["score"] if r.get("score") is not None else -1)))
 
 
 def _vuln_reach(r: dict) -> int:
@@ -1047,19 +1070,22 @@ def vulnerable_dependencies(report: dict) -> list:
     file's directory (or a workspace member it pins) declares that it ships; the rest are a warning. One
     pinned only by a lock file under tests, examples, docs or vendored code is a note. A pip requirement range
     whose floor is vulnerable is said as a range, not as an installed version. The advice names the package
-    to upgrade first and the version that fixes it."""
+    to upgrade first (_vuln_first) and the version that fixes it, and says it is the highest score with a
+    fix when that is why it was picked."""
     out = []
     for rid, sev, title, group in _vuln_rows(report):
         locked = [r for r in group if not _floating(r)]
-        worst = (locked or group)[0]
+        pool = locked or group
+        worst = _vuln_first(pool)
+        top = ", the highest with a fix published" if worst.get("fixed") and len(pool) > 1 and not _vuln_critical(worst) else ""
         if worst.get("malicious"):
             target = f"Remove {worst['name']} {worst['version']} from {worst['source']} first; {_malicious_id(worst)} lists it as malicious, so no version fixes it."
         elif _floating(worst):
             target = f"Raise the floor of {worst['name']} to {worst['fixed']} in {worst['source']} first" if worst.get("fixed") else f"Look at {worst['name']} in {worst['source']} first, which has no fixed version yet"
-            target += f"; its floor scores {worst['score']:.1f}." if worst.get("score") is not None else "."
+            target += f"; its floor scores CVSS {worst['score']:.1f}{top}." if worst.get("score") is not None else "."
         else:
             target = f"Upgrade {worst['name']} to {worst['fixed']} in {worst['source']} first" if worst.get("fixed") else f"Look at {worst['name']} in {worst['source']} first, which has no fixed version yet"
-            target += f"; it scores {worst['score']:.1f}" if worst.get("score") is not None else ""
+            target += f"; it scores CVSS {worst['score']:.1f}{top}" if worst.get("score") is not None else ""
             target += f", and {_deploy_phrase(worst['deploys'])} ships that lock." if worst.get("deploys") else "."
         statement = _vuln_statement(group)
         unshipped = sorted({r["source"] for r in locked if not r.get("deploys") and r.get("score") is not None and r["score"] >= CRITICAL_SCORE})
@@ -1080,11 +1106,11 @@ def vulnerable_dependencies(report: dict) -> list:
 
 
 def _deploy_phrase(reasons: list) -> str:
-    return reasons[0] + (f" (and {len(reasons) - 1} more)" if len(reasons) > 1 else "")
+    return reasons[0] + (f" (and {len(reasons) - 1:,} more)" if len(reasons) > 1 else "")
 
 
 def _files_list(items: list, n: int = 3) -> str:
-    return textfmt.join_and(items[:n]) + (f" and {len(items) - n} more" if len(items) > n else "")
+    return textfmt.join_and(items[:n]) + (f" and {len(items) - n:,} more" if len(items) > n else "")
 
 
 def hygiene_findings(report: dict) -> list:
@@ -1165,7 +1191,7 @@ def _hygiene_actions(h: dict, out: list) -> None:
         else:   # an output directory from before the rows said what each step is handed: its evidence as it was
             rows = [{"file": u["file"], "uses": u["uses"]} for u in a["unpinned"][:10]]
         out.append(_f("warning", "Actions pinned by tag or branch",
-                      f"{n} of {total} workflow steps use an action by tag or branch: {listed}. Whoever controls the action can move the tag to other code.",
+                      f"{n:,} of {total:,} workflow steps use an action by tag or branch: {listed}. Whoever controls the action can move the tag to other code.",
                       f"Pin {ranked[0]['uses']} to a full commit SHA first, with the tag in a comment; Dependabot and Renovate keep such pins current.",
                       rule=rule, evidence={"count": n, "pinned": a.get("pinned", 0), "unpinned": rows}))
 
@@ -1345,7 +1371,7 @@ def _hygiene_install(h: dict, out: list) -> None:
         parts = []
         if ins.get("lockfile"):
             n = ins.get("lockfile_count", len(ins["lockfile"]))
-            parts.append(f"{n} locked package{'s' if n != 1 else ''} {'runs' if n == 1 else 'run'} an install script ({_files_list([x['package'] for x in ins['lockfile']])})")
+            parts.append(f"{n:,} locked package{'s' if n != 1 else ''} {'runs' if n == 1 else 'run'} an install script ({_files_list([x['package'] for x in ins['lockfile']])})")
         parts += [f"{m['file']} declares {textfmt.join_and(m['scripts'])}" for m in (ins.get("manifests") or [])[:3]]
         parts += [f"{s_['file']} calls {textfmt.join_and(s_['calls'])}" for s_ in (ins.get("setup_py") or [])[:3]]
         # the advice of the ecosystem the finding names: npm's switch does nothing to a setup.py, which pip runs whenever it builds from source
@@ -1425,7 +1451,7 @@ def _hygiene_unused(h: dict, out: list) -> None:
     n = im.get("count", len(rows))
     first = rows[0]
     out.append(_f("info", "Declared dependencies nothing imports",
-                  f"{n} runtime {'dependency is' if n == 1 else 'dependencies are'} declared and never imported by a tracked file, nor named in a script or configuration: {listed}.",
+                  f"{n:,} runtime {'dependency is' if n == 1 else 'dependencies are'} declared and never imported by a tracked file, nor named in a script or configuration: {listed}.",
                   f"Remove {first['package']} from {first['manifest']} if nothing loads it at run time; an unused dependency is still installed, scanned and updated.",
                   rule={"id": "unused_dependencies", "reads": "package.json dependencies, go.mod direct requirements, Cargo.toml [dependencies]"},
                   evidence={"count": n, "manifests": im.get("manifests", 0), "unused": rows[:10]}))
@@ -1457,9 +1483,9 @@ def _hygiene_copyleft(h: dict, out: list) -> None:
     n = lic.get("strong_count", len(strong))
     listed = _files_list([f"{d['name']} {d['version']} ({d['expression']})" for d in strong])
     own = textfmt.join_and(sorted({d["expression"] for d in lic.get("declared") or []} | ({lic["file_licence"]} if lic.get("file_licence") else set())))
-    weak = f" {lic['weak_count']} more declare{'s' if lic.get('weak_count') == 1 else ''} weak copyleft (LGPL, MPL, EPL), which a dependency usually may." if lic.get("weak_count") else ""
+    weak = f" {lic['weak_count']:,} more declare{'s' if lic.get('weak_count') == 1 else ''} weak copyleft (LGPL, MPL, EPL), which a dependency usually may." if lic.get("weak_count") else ""
     out.append(_f("warning", "Copyleft dependencies in a permissive project",
-                  f"The project declares {own}, and {n} runtime {'dependency' if n == 1 else 'dependencies'} in {textfmt.join_and(sorted({d['lockfile'] for d in strong}))} "
+                  f"The project declares {own}, and {n:,} runtime {'dependency' if n == 1 else 'dependencies'} in {textfmt.join_and(sorted({d['lockfile'] for d in strong}))} "
                   f"{'declares' if n == 1 else 'declare'} a strong copyleft licence: {listed}.{weak} Declared, as the lock file records it, not read from the package's files.",
                   f"Check whether {strong[0]['name']} is distributed with the project; if it is, its licence terms reach the whole work.",
                   rule={"id": "copyleft_dependencies", "reads": "package-lock.json and composer.lock licence fields, runtime packages only"},
@@ -1499,9 +1525,9 @@ def debt_in_hotspots(report: dict, min_markers: int = 3, min_files: int = 2, top
     first = max(flagged, key=lambda t: t[1])[0]
     sample = (files[first].get("debt_sample") or [{}])[0]
     at = f", starting at line {sample['line']}" if sample.get("line") else ""
-    listed = "; ".join(f"{f} ({n})" for f, n in flagged[:5]) + (f" and {len(flagged) - 5} more" if len(flagged) > 5 else "")
+    listed = "; ".join(f"{f} ({n:,})" for f, n in flagged[:5]) + (f" and {len(flagged) - 5:,} more" if len(flagged) > 5 else "")
     return [_f("info", "Debt the authors flagged in hotspots",
-               f"{len(flagged)} of the top {len(top)} hotspots carry TODO, FIXME, XXX or HACK comments: {listed}.",
+               f"{len(flagged):,} of the top {len(top):,} hotspots carry TODO, FIXME, XXX or HACK comments: {listed}.",
                f"Resolve or ticket the markers in {first} first{at}; it changes often and its authors said it is unfinished.",
                rule={"id": "debt_in_hotspots", "markers": ["TODO", "FIXME", "XXX", "HACK"], "min_markers": min_markers, "top_n": top_n,
                      "ref": "Maldonado and Shihab, MTD 2015"},
@@ -1533,7 +1559,7 @@ def swallowed_errors(report: dict, min_count: int = 5, top_n: int = 10) -> list:
     rows.sort(key=lambda r: (-r[1].get("empty_catch_count", 0), r[0]))
     top = set(_scored_top(report, top_n))
     hot = [p for p, _ in rows if p in top]
-    listed = _files_list([f"{p}:{sh['empty_catch'][0]}" + (f" and {sh['empty_catch_count'] - 1} more there" if sh.get("empty_catch_count", 1) > 1 else "") for p, sh in rows])
+    listed = _files_list([f"{p}:{sh['empty_catch'][0]}" + (f" and {sh['empty_catch_count'] - 1:,} more there" if sh.get("empty_catch_count", 1) > 1 else "") for p, sh in rows])
     bare = sum(sh.get("bare_except_count", 0) for _, sh in rows)
     first = hot[0] if hot else rows[0][0]
     return [_f("warning" if hot else "info", "Errors caught and dropped",
@@ -1605,10 +1631,10 @@ def deep_nesting(report: dict, min_nesting: int = 5, min_bumps: int = 3, top_n: 
 
     def one(f):
         return f"{_called(f)} ({f['file']}:{f['start']}) nested {f['nesting']} deep, cognitive complexity {f['cognitive']}, {f['bumps']} bump{'s' if f['bumps'] != 1 else ''}"
-    listed = "; ".join(one(f) for f in deep[:5]) + (f" and {len(deep) - 5} more" if len(deep) > 5 else "")
+    listed = "; ".join(one(f) for f in deep[:5]) + (f" and {len(deep) - 5:,} more" if len(deep) > 5 else "")
     first = next((f for f in deep if f["file"] in top), deep[0])
     which = f"the anonymous function at {first['file']}:{first['start']}" if _anonymous(first) else f"{first['name']} in {first['file']}"
-    return [_f(sev, "Deeply nested code", f"{_plural(len(deep), 'function')} nest {min_nesting} levels or more or carry {min_bumps}+ separate nested chunks: {listed}.",
+    return [_f(sev, "Deeply nested code", f"{_plural(len(deep), 'function')} nest {min_nesting} levels or more or carry {min_bumps} or more separate nested chunks: {listed}.",
                f"Flatten {which} first: return early and move each nested chunk into a function of its own.",
                rule={"id": "deep_nesting", "min_nesting": min_nesting, "min_bumps": min_bumps, "measure": "tree-sitter",
                      "ref": "SonarSource cognitive complexity; CodeScene code health"},
@@ -1769,7 +1795,7 @@ def import_cycles(report: dict, min_resolved: float = structure.MIN_RESOLVED, mi
 
     def said(group, loop):
         arrow = " → ".join(loop)
-        return arrow if len(loop) - 1 == len(group) else f"{arrow}, one loop in a group of {len(group)} files"
+        return arrow if len(loop) - 1 == len(group) else f"{arrow}, one loop in a group of {len(group):,} files"
     listed = "; ".join(said(g, l) for g, l in zip(groups[:3], loops[:3]))
     more = f" ({_plural(len(groups) - 3, 'more group')})" if len(groups) > 3 else ""
     n = len(groups)
@@ -1945,13 +1971,13 @@ def truck_factor_absent(report: dict, min_files: int = TRUCK_MIN_FILES):
     files = _pool_files(report)
     if len(files) < min_files:
         return {"measure": "truck_factor", "label": "truck factor", "files": len(files), "min_files": min_files,
-                "reason": f"{len(files)} source file{'s' if len(files) != 1 else ''}, needs {min_files}"}
+                "reason": f"{len(files):,} source file{'s' if len(files) != 1 else ''}, needs {min_files:,}"}
     if not report.get("doa"):
         return None
     orphans = sum(1 for a in _authors_of(report, files).values() if not a)
     if 2 * orphans > len(files):   # knowledge.truck_factor's own stop: more than half orphaned before anyone leaves
         return {"measure": "truck_factor", "label": "truck factor", "files": len(files), "orphaned": orphans,
-                "reason": f"{orphans} of the {len(files)} source files have no author on record"}
+                "reason": f"{orphans:,} of the {len(files):,} source files have no author on record"}
     return None
 
 
@@ -1976,8 +2002,9 @@ def truck_factor(report: dict, min_files: int = TRUCK_MIN_FILES, area_files: int
     """Avelino et al.'s truck factor over the degree of authorship: how many people have to leave before
     more than half the source files have no author. One is a warning, two a note. Changes rather than
     lines, and a creator's bonus, so it can disagree with the surviving-code share, which the bus-factor
-    finding reads; the finding says so when it does. Also per area, and with knowledge halving every
-    five months."""
+    rule reads. The finding no longer names that share's holder: on prometheus the sentence cited a
+    "bus-factor finding" the report did not hold, and named Julien Pivotto or Bartlomiej Plotka by whether
+    --plots had run. Also per area, and with knowledge halving every five months."""
     if not report.get("doa"):
         return []
     files = _pool_files(report)
@@ -2022,25 +2049,20 @@ def truck_factor(report: dict, min_files: int = TRUCK_MIN_FILES, area_files: int
     if tf == 1 and top == removed[0] and 2 * lines <= whole:
         # one departure orphans most files while the lines are split: the two measures differ, so the share is said where the name is
         lead = f"{top} ({'gone, ' if top in gone else ''}{_pct(lines, whole)} of the surviving code)"
-    statement = (f"Truck factor {tf}: without {lead}, {orphans} of the {len(files)} source files ({_pct(orphans, len(files))}) "
+    statement = (f"Truck factor {tf}: without {lead}, {orphans:,} of the {len(files):,} source files ({_pct(orphans, len(files))}) "
                  f"have no author left.")
     left = sum(1 for p in removed if p in gone)
     if left:   # for them it is not a risk but a loss that has happened
         statement += " For those marked gone it already has."
     if tf_d != tf and not removed_d:
-        statement += " With knowledge halving every five months, more than half the files already have no author."
+        statement += " With knowledge halving every 5 months, more than half the files already have no author."
     elif tf_d != tf and set(removed) < set(removed_d):   # the same people and some more: only the more are new
-        statement += f" With knowledge halving every five months it is {tf_d}, adding {names([p for p in removed_d if p not in removed])}."
+        statement += f" With knowledge halving every 5 months it is {tf_d}, adding {names([p for p in removed_d if p not in removed])}."
     elif tf_d != tf:
-        statement += f" With knowledge halving every five months it is {tf_d} ({names(removed_d)})."
+        statement += f" With knowledge halving every 5 months it is {tf_d} ({names(removed_d)})."
     if lone:
         statement += " Areas with a truck factor of one: " + ", ".join(
-            f"{a} ({_who(w, gone)}{f', new since {young[a]}' if a in young else ''})" for a, w, _, _ in lone[:5]) + (f" and {len(lone) - 5} more" if len(lone) > 5 else "") + "."
-    if shares and top != removed[0] and level > 1:   # no one name to give: the first in the table would be an accident of its order
-        statement += f" The surviving code's largest share, {_pct(lines, whole)}, is held by {level} people equally, which the bus-factor finding reads."
-    elif shares and top != removed[0]:
-        statement += (f" The surviving code's largest share is {top}'s ({_pct(lines, whole)}), which the bus-factor finding reads." if top not in gone else
-                      f" The surviving code's largest share, {_pct(lines, whole)}, belongs to {top} (gone), which the bus-factor finding reads.")
+            f"{a} ({_who(w, gone)}{f', new since {young[a]}' if a in young else ''})" for a, w, _, _ in lone[:5]) + (f" and {len(lone) - 5:,} more" if len(lone) > 5 else "") + "."
     # the person to pair with is the first named who is still here, on an area that is theirs
     ask = next((p for p in removed if p not in gone), None)
     shared = 0
@@ -2091,9 +2113,11 @@ RULES = [dormant, secrets_found, credential_files, vulnerable_dependencies, plac
 SUMMARISED = frozenset()
 
 # Rules nobody has labelled yet: the structure step's, which ran only where tree-sitter was installed by hand
-# until 0.32.0 and so never reached the measurement's findings sheet. They are named in a line of their own, so
-# the default report does not grow by rules whose worth is unmeasured; the labels decide where they belong, and
-# a rule moves out of here when its findings are labelled, into SUMMARISED or into the report proper.
+# until 0.32.0 and so never reached the measurement's findings sheet. The report tags their findings "(not
+# measured yet)" and prints a note of theirs as one statement with no step (brief.compact), so the default report
+# grows little by rules whose worth is unmeasured and every finding still has an entry to count; the labels
+# decide where they belong, and a rule moves out of here when its findings are labelled, into SUMMARISED or
+# into the report proper. Each id here has a short form in brief.FORMS, which a test holds.
 UNJUDGED = frozenset({"commented_out_code", "debt_in_hotspots", "deep_nesting", "hardcoded_addresses",
                       "hidden_coupling", "import_cycles", "swallowed_errors", "unreferenced_files"})
 
@@ -2133,11 +2157,11 @@ def one_owner(found: list, gone: set) -> list:
         name = _who(who, gone)
         if truck:
             ev = truck["evidence"]
-            parts.append(f"without {'them' if bus else name}, {ev['orphaned']} of the {ev['files']} source files "
+            parts.append(f"without {'them' if bus else name}, {ev['orphaned']:,} of the {ev['files']:,} source files "
                          f"({_pct(ev['orphaned'], ev['files'])}) have no author left (truck factor 1)")
         if isl:
             ev = isl["evidence"]
-            parts.append(f"{ev['count']} area(s) of at least {isl['rule']['min_lines']} lines are almost entirely theirs, "
+            parts.append(f"{_plural(ev['count'], 'area')} of at least {isl['rule']['min_lines']} lines {'is' if ev['count'] == 1 else 'are'} almost entirely theirs, "
                          f"{_pct(ev['covered_lines'], ev['total_lines'])} of all lines added (knowledge islands)")
         said = ", and ".join(parts)
         said = said[0].upper() + said[1:] + "."
@@ -2150,12 +2174,25 @@ def one_owner(found: list, gone: set) -> list:
         mine = [a for a in (truck["evidence"]["areas"] if truck else []) if a["author"] == who and not a.get("new_since")]
         if truck and mine and who not in gone:
             a = mine[0]   # ordered by files at stake
-            advice = f"Pair someone with {who} on {a['area']} first; {a['orphaned']} of its {a['files']} files would have no author left without them."
+            advice = f"Pair someone with {who} on {a['area']} first; {a['orphaned']:,} of its {a['files']:,} files would have no author left without them."
         merged = _f(max((lead, *rest), key=lambda f: -SEVERITIES.index(f["severity"]))["severity"], lead["title"], statement, advice,
                     rule={**lead["rule"], "measures": {f["rule"]["id"]: f["rule"] for f in rest}},
                     evidence={**lead["evidence"], "measures": {f["rule"]["id"]: f["evidence"] for f in rest}})
         found = [merged if f is lead else f for f in found if not any(f is r for r in rest)]
     return found
+
+
+# What a rule's `by` says when the name of a path is all it read: no scanner looked inside and nothing was counted.
+BY_NAME_ALONE = ("file name", "path convention")
+
+
+def order_key(f: dict) -> tuple:
+    """The order of the findings: by severity, and within a severity the ones that rest on a path's name alone
+    (the rule declares it: `by` in BY_NAME_ALONE) after the ones a scan or a count stands behind. The sort is
+    stable, so RULES' order holds otherwise. prometheus: the report opened on a tracked .env that the secrets
+    scan found no value in, ahead of 28 vulnerable packages; the order of the warnings is read as the order
+    to act in, and a name is the weakest evidence a warning has."""
+    return SEVERITIES.index(f["severity"]), f["rule"].get("by") in BY_NAME_ALONE
 
 
 def evaluate(report: dict) -> list:
@@ -2166,6 +2203,6 @@ def evaluate(report: dict) -> list:
     for f in found:
         if f["rule"]["id"] in UNJUDGED:
             f["summary"] = True
-            f["unjudged"] = True   # a line of its own: true or not, nobody has said whether it is worth acting on
-    found.sort(key=lambda f: SEVERITIES.index(f["severity"]))
+            f["unjudged"] = True   # tagged in the report: true or not, nobody has said whether it is worth acting on
+    found.sort(key=order_key)
     return found
