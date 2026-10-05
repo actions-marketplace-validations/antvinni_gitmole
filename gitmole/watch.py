@@ -163,13 +163,62 @@ def why_empty(report: dict, min_revs: int = 2) -> str:
     return "only " + textfmt.join_and(named) + " changed more than once"
 
 
+def _changed(r: dict) -> str:
+    return f"changed {textfmt.times(r['revs'])}"
+
+
+def _fixed_lately(r: dict) -> str:
+    return f"fixed {textfmt.times(r['recent_fixes'])} in 6 months"
+
+
+def _nameless(fn: dict) -> bool:
+    """A row of the function step (lizard, keyed `function`) or of the structure step (keyed `name`) that has no name."""
+    return bool(fn.get("anonymous")) or textfmt.nameless(fn["function"] if "function" in fn else fn["name"])
+
+
+def _complex(fn: dict) -> str:
+    named = f"the function at line {fn['start']}" if _nameless(fn) else f"{fn['function']}()"
+    return f"{named} complexity {fn['ccn']:,}"
+
+
+def _nested(deepest: dict) -> str:
+    named = f"the function at line {deepest['start']}" if textfmt.nameless(deepest["name"]) else f"{deepest['name']}()"
+    return f"{named} nested {deepest['nesting']} deep"
+
+
+def first_look(r: dict):
+    """The one function of a watch-list row to open first, as the table's "look at first" cell and as the
+    reason that names it: the deepest function when it nests NESTING_FLOOR levels or more, else the most
+    complex when it is at CCN_FLOOR or over, else None. Nesting leads because it names a place inside the
+    function; prometheus's cmd/prometheus/main.go has main() at complexity 69 over 701 lines and an anonymous
+    function at line 1401 nested 5 deep, and the second is where a reader can start. Returns (cell, reason)."""
+    deepest, fn = r.get("deepest"), r.get("function")
+    if deepest and deepest["nesting"] >= NESTING_FLOOR:
+        named = f"{textfmt.ANONYMOUS}:{deepest['start']}" if textfmt.nameless(deepest["name"]) else f"{deepest['name']}()"
+        return f"{named} nesting {deepest['nesting']}", _nested(deepest)
+    if fn and fn["ccn"] >= CCN_FLOOR:
+        named = f"{textfmt.ANONYMOUS}:{fn['start']}" if _nameless(fn) else f"{fn['function']}()"
+        return f"{named} complexity {fn['ccn']:,}", _complex(fn)
+    return None
+
+
+def beyond_columns(r: dict) -> list:
+    """The reasons of a watch-list row that the table's columns do not already hold: every reason but the
+    change count, the recent fixes and the function "look at first" names. What --full prints under the row."""
+    said = {_changed(r), _fixed_lately(r)}
+    look = first_look(r)
+    if look:
+        said.add(look[1])
+    return [x for x in r["reasons"] if x not in said]
+
+
 def _reasons(r: dict, code_pct: int = None) -> list:
     """The reasons, most actionable first: how often it changed and was fixed, who owns it, what in it
     is complex, what its authors flagged and what its tests do, then how it couples; the scatter and
     the size of the file last. The default terminal report shows the first REASONS_SHOWN."""
-    out = [f"changed {textfmt.times(r['revs'])}"]
+    out = [_changed(r)]
     if r["recent_fixes"]:
-        out.append(f"fixed {textfmt.times(r['recent_fixes'])} in six months")
+        out.append(_fixed_lately(r))
     elif r["fixes"]:
         out.append(f"fixed {textfmt.times(r['fixes'])}")
     if r["authors"] == 1:
@@ -177,33 +226,31 @@ def _reasons(r: dict, code_pct: int = None) -> list:
     elif r["owner_share"] >= SOLO_SHARE and r["owner"]:
         out.append(f"{r['owner']} wrote {round(100 * r['owner_share'])}% of it")
     if r.get("minor", 0) >= MINOR_FLOOR:
-        out.append(f"{r['minor']} of {r['authors']} authors are minor contributors")   # Bird et al.: the defect signal; the sole owner is the knowledge signal
+        out.append(f"{r['minor']:,} of {r['authors']:,} authors are minor contributors")   # Bird et al.: the defect signal; the sole owner is the knowledge signal
     fn = r["function"]
     if fn and fn["ccn"] >= CCN_FLOOR:
-        named = f"the function at line {fn['start']}" if fn.get("anonymous") or textfmt.nameless(fn["function"]) else f"{fn['function']}()"
-        out.append(f"{named} complexity {fn['ccn']}")
+        out.append(_complex(fn))
     grown = r.get("trend") or ""
     if grown.startswith("+") and int(grown[1:-1]) >= trend.GROWTH_FLOOR:
         # the Hotspots table's trend column, which the default report no longer shows; scc's sum grows with the lines, so the code's change stands beside it
         out.append(f"{grown} summed complexity in a year" + (f", code {code_pct:+d}%" if code_pct is not None else ""))
     deepest = r.get("deepest")
     if deepest and deepest["nesting"] >= NESTING_FLOOR:
-        named = f"the function at line {deepest['start']}" if textfmt.nameless(deepest["name"]) else f"{deepest['name']}()"
-        out.append(f"{named} nested {deepest['nesting']} deep")
+        out.append(_nested(deepest))
     if r.get("debt", 0) >= DEBT_FLOOR:
-        out.append(f"{r['debt']} TODO/FIXME comments")   # self-admitted debt: the authors said it is unfinished
+        out.append(f"{r['debt']:,} TODO/FIXME comments")   # self-admitted debt: the authors said it is unfinished
     if r.get("changes") and r["changes"] >= TESTED_SETS and r["tested_share"] <= TESTED_SHARE:
-        out.append(f"no test changed in its {r['changes']} changes" if not r["with_tests"]
-                   else f"a test changed in {r['with_tests']} of its {r['changes']} changes")
+        out.append(f"no test changed in its {r['changes']:,} changes" if not r["with_tests"]
+                   else f"a test changed in {r['with_tests']:,} of its {r['changes']:,} changes")
     if r["companions"]:
         other, degree = r["companions"][0]
         more = len(r["companions"]) - 1
         tail = f" and {more} other{'s' if more != 1 else ''}" if more else ""
         out.append(f"changes with {other} ({degree}%){tail}")
     if r.get("partners", 0) >= PARTNERS_FLOOR:
-        out.append(f"changes alongside {r['partners']} other files")   # sum of coupling: weakly coupled to everything
+        out.append(f"changes alongside {r['partners']:,} other files")   # sum of coupling: weakly coupled to everything
     if r.get("definitions", 0) >= GOD_FILE:
-        out.append(f"defines {r['definitions']} functions and classes")
+        out.append(f"defines {r['definitions']:,} functions and classes")
     if r.get("late", 0) >= LATE_FLOOR and r["late"] / max(1, r.get("late_revs") or 1) >= LATE_SHARE:
         out.append(f"{round(100 * r['late'] / r['late_revs'])}% of its changes made between midnight and 4 am")   # Eyolfson et al.: a tie-breaker, never a rank
     if (r.get("periods") or 0) >= PERIODS_FLOOR:
