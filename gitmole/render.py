@@ -183,6 +183,17 @@ def _hide_header_pairs(pairs: list, full) -> tuple:
     return kept, (f"{hidden} header pair{'s' if hidden != 1 else ''} hidden{HIDDEN_SUFFIX}" if hidden else None)
 
 
+def _hide_locale_pairs(pairs: list, full) -> tuple:
+    """Coupled pairs where both files are translations (filetypes.is_locale_path): a message added in one
+    locale is added in all of them, so they change together by construction. A locale paired with the code
+    that uses it stays."""
+    if full is True:
+        return pairs, None
+    kept = [p for p in pairs if not (filetypes.is_locale_path(p["entity"]) and filetypes.is_locale_path(p["coupled"]))]
+    hidden = len(pairs) - len(kept)
+    return kept, (f"{hidden} locale pair{'s' if hidden != 1 else ''} hidden{HIDDEN_SUFFIX}" if hidden else None)
+
+
 def _join_hidden(*notes) -> str:
     """Several hidden-row notes as one caption phrase: 'A hidden; B hidden; --full shows them'."""
     parts = [n[:-len(HIDDEN_SUFFIX)] if n.endswith(HIDDEN_SUFFIX) else n for n in notes if n]
@@ -814,9 +825,10 @@ def coupling_section(report: dict, full: bool = True, width=None) -> dict:
     pairs, release_note = _hide_release(pairs, full)
     pairs, example_note = _hide_example_pairs(pairs, full)
     pairs, header_note = _hide_header_pairs(pairs, full)
+    pairs, locale_note = _hide_locale_pairs(pairs, full)
     pairs, vendor_note = _hide_vendor(pairs, lambda p: (p["entity"], p["coupled"]), full, noun="vendored pair", plural="vendored pairs", report=report, classifier=cls)
     pairs, generated_note = _hide_generated(pairs, lambda p: (p["entity"], p["coupled"]), report, full, noun="generated pair", plural="generated pairs", classifier=cls)
-    gone_note = _join_hidden(gone_note, release_note, example_note, header_note, vendor_note, generated_note)
+    gone_note = _join_hidden(gone_note, release_note, example_note, header_note, locale_note, vendor_note, generated_note)
     groups, cluster_note = [], None
     if full is not True:
         # a directory whose files all change together is one row; --full lists every pair
@@ -982,6 +994,44 @@ def _owner_cells(area: dict, gone: set) -> list:
     return [cell(0), "-" if knowledge.tied(held) > 1 else cell(1)]
 
 
+def _declared_text(declared: dict) -> str:
+    """Where the project's name was read, as the manifest writes it: package.json "name": "univer"."""
+    name, path = declared["name"], declared["file"]
+    if path.endswith(".json"):
+        return f'{path} "{declared["field"]}": "{name}"'
+    if path.endswith(".toml"):
+        return f'{path} {declared["field"]} = "{name}"'
+    return f"{path} {declared['field']} …/{name}"
+
+
+def named_like_project(report: dict, areas: list):
+    """A caption for an owner the report already names, in a knowledge-map row shown or as the one author of a
+    truck-factor-one area in that finding, whose name run together is the name the root manifest gives the
+    project (meta.declared): "Univer is named like the project (package.json "name": "univer"); git does not
+    record whether one person or several commit under it." It says how the identity is recorded and nothing
+    about who is behind it, and it changes no number; None when no owner shown is named so."""
+    declared = report["meta"].get("declared") or {}
+    target = identity._squash(declared.get("name") or "")
+    if not target:
+        return None
+    named = set()
+    for a in areas:
+        held = a["owners"]
+        if held and knowledge.tied(held, 0) == 1:
+            named.add(held[0][0])
+            if len(held) > 1 and knowledge.tied(held, 1) == 1:
+                named.add(held[1][0])
+    hit = sorted(n for n in named if identity._squash(n) == target)
+    if not hit and any(identity._squash(i.get("name") or "") == target for i in report["meta"].get("identities") or []):
+        from .findings import truck_factor   # only when someone is named so: the finding is not computed twice for nothing
+        lone = [a["author"] for f in truck_factor(report) for a in f["evidence"].get("areas", [])[:5]]
+        hit = sorted({n for n in lone if identity._squash(n) == target})
+    if not hit:
+        return None
+    return (f"{textfmt.join_and(hit)} {'is' if len(hit) == 1 else 'are'} named like the project ({_declared_text(declared)}); "
+            "git does not record whether one person or several commit under it")
+
+
 def knowledge_section(report: dict, full: bool = True, width=None) -> dict:
     """Ownership by area of the tree: who wrote most of each directory, gone owners marked."""
     months = report["meta"].get("gone_months", loss.DEFAULT_MONTHS)
@@ -1030,6 +1080,8 @@ def knowledge_section(report: dict, full: bool = True, width=None) -> dict:
         notes.append(left)
     if shown:
         notes.append("agents: the lines trailers credit to coding tools, told by their no-reply address (identity.tools)")
+    if rows and (left := named_like_project(report, areas[:limit])):
+        notes.append(left)
     if gone:
         notes.append(f"gone = no commits in the {months} months before {report['meta'].get('last_date')}"
                      + ("; gone and lost are measured over the whole history" if report["meta"].get("since") else ""))

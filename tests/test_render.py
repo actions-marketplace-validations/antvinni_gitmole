@@ -727,6 +727,24 @@ class Report(unittest.TestCase):
         full = _section_text(rendered(r, [], width=200, full=True), "Change coupling")
         self.assertIn("100%", full)
 
+    def test_default_coupling_hides_locale_pairs_and_says_so(self):
+        """univer's top two rows were locale/ clusters: a message added in one locale is added in all of them.
+        A locale paired with the code that reads it stays."""
+        r = sample_report()
+        for f in ("src/locale/en-US.ts", "src/locale/zh-CN.ts", "src/locales/de.ts", "src/locale/index.ts", "src/menu.ts"):
+            r["size"]["files"][f] = {"code": 30, "complexity": 1}
+        r["coupling"] = [{"entity": "src/locale/en-US.ts", "coupled": "src/locale/zh-CN.ts", "degree": 91, "average-revs": 20},
+                         {"entity": "src/locales/de.ts", "coupled": "src/locale/zh-CN.ts", "degree": 88, "average-revs": 20},
+                         {"entity": "src/locale/en-US.ts", "coupled": "src/menu.ts", "degree": 60, "average-revs": 9},
+                         {"entity": "src/locale/index.ts", "coupled": "src/locale/en-US.ts", "degree": 55, "average-revs": 9}]
+        coupling = _section_text(rendered(r, [], width=200), "Change coupling")
+        self.assertIn("src/menu.ts", coupling)
+        self.assertIn("src/locale/index.ts", coupling)
+        self.assertNotIn("zh-CN", coupling)
+        self.assertIn("2 locale pairs hidden; --full shows them", coupling)
+        full = _section_text(rendered(r, [], width=200, full=True), "Change coupling")
+        self.assertIn("91%", full)
+
     def test_default_coupling_hides_pairs_of_examples_and_says_so(self):
         """curl's top two rows were docs/examples/ clusters: sibling programs showing one technique for
         two protocols. An example paired with the code it demonstrates stays."""
@@ -1289,6 +1307,23 @@ class KnowledgeMap(unittest.TestCase):
         self.assertEqual(render.knowledge_section(r, full=False)["columns"], ["area", "lines added", "main owner", "second"],
                          "no column for less than a whole percent")
         self.assertEqual(render.knowledge_section(r, full=True)["columns"][-1], "second")
+
+    def test_an_owner_named_like_the_project_is_captioned_and_nothing_else_moves(self):
+        # univer: "Univer" owns 55% of engine-render/ and the root package.json is named "univer"
+        r = sample_report()
+        plain = render.knowledge_section(r, full=False)
+        self.assertNotIn("named like the project", plain["caption"] or "")
+        r["meta"]["declared"] = {"name": "ann", "file": "package.json", "field": "name"}
+        km = render.knowledge_section(r, full=False)
+        self.assertIn('Ann is named like the project (package.json "name": "ann"); git does not record whether one person '
+                      "or several commit under it", km["caption"])
+        self.assertEqual(km["rows"], plain["rows"], "a caption, not a number")
+        r["meta"]["declared"] = {"name": "demo", "file": "go.mod", "field": "module"}
+        r["meta"]["identities"] = [{"name": "Demo", "email": "d@x.example", "commits": 1}]
+        self.assertNotIn("named like the project", render.knowledge_section(r, full=False)["caption"] or "",
+                         "an identity the map does not show as an owner is not captioned")
+        self.assertEqual(render._declared_text({"name": "demo", "file": "go.mod", "field": "module"}), "go.mod module …/demo")
+        self.assertEqual(render._declared_text({"name": "demo", "file": "Cargo.toml", "field": "name"}), 'Cargo.toml name = "demo"')
 
 
 class Timeline(unittest.TestCase):
