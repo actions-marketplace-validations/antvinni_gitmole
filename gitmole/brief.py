@@ -18,10 +18,21 @@ from . import deps, findings, textfmt
 ELLIPSIS = textfmt.ELLIPSIS
 NBSP = " "         # holds a subject to its number while a line is wrapped ("promql/engine.go 10"); printed as a space
 SEPARATORS = ("·",)     # a line never starts with one
-SUBJECT_LINES = 3       # the subject lines of one finding, a hard cap
+SUBJECT_LINES = 3       # the subject lines of one finding, a hard cap, with the one exception below
+# Vulnerable dependencies is the exception: its subjects are lock files, each with the packages that make it
+# matter, so the block is at most VULN_GROUPS lock-file groups of at most VULN_GROUP_LINES lines each and one
+# line counting the rest, ten lines in all. A fourth group would replace one; nothing here grows with the
+# number of lock files.
+VULN_GROUPS = 3
+VULN_GROUP_LINES = 3
+HANG = "  "             # a subject entry's continuation, in from its first line
+DEPENDENCIES_FILE = "dependencies.json"   # the osv-scanner step's file in the output directory, where the packages not named are
 STEP_LINES = 3          # the step's lines
 WHOLE_LINES = 3         # a statement this short has no need of a short form
 BASELINE_MARK = "In the baseline: "   # gate.BASELINE_MARK, which --baseline puts in front of a finding's detail
+# After the title of a finding from a rule in findings.UNJUDGED, in either shape; the Findings title glosses it once.
+UNMEASURED_TAG = "(not measured yet)"
+COMPACT_LINES = 3       # a note from such a rule: title, tag and statement in this many lines, and no step
 IGNORE_DEPS_SHORT = "One that does not apply to this code can be ignored in osv-scanner.toml."
 
 # A Go pseudo-version, by its shape: a base version, a 14-digit commit time, a 12-character commit
@@ -37,10 +48,11 @@ def short_version(text: str) -> str:
     return PSEUDO_VERSION.sub(lambda m: f"{m.group(1)}{ELLIPSIS}-{m.group(2)}", text)
 
 
-def wrap(text: str, width: int) -> list:
+def wrap(text: str, width: int, rest: int = None) -> list:
     """`text` as lines of at most `width` characters, broken at spaces only: a path, a hash, a package or a
     version is never split (one longer than a line is left whole on a line of its own), a separator stays at
-    the end of the line before it, and what a no-break space joins stays together."""
+    the end of the line before it, and what a no-break space joins stays together. With `rest`, the lines
+    after the first are at most that wide: an entry whose continuation is indented."""
     words = []
     for w in text.split(" "):
         if not w:
@@ -51,7 +63,7 @@ def wrap(text: str, width: int) -> list:
             words.append(w)
     lines, line = [], ""
     for w in words:
-        if line and len(line) + 1 + len(w) > width:
+        if line and len(line) + 1 + len(w) > (width if rest is None or not lines else rest):
             lines.append(line)
             line = w
         else:
@@ -152,13 +164,14 @@ def _credential_files(f: dict, report: dict, ctx: dict):
     return {"statement": statement, "subjects": subjects, "step": step}
 
 
-WHY_WARNING = "; a warning, not critical, as nothing beside it declares a deployment"
+# Why a score in the critical band sits under a warning's mark. The mark says "warning"; the words say what is
+# missing, in few enough letters to stay on the entry's third line at 80 columns (prometheus's websocket-driver).
+WHY_WARNING = "; not critical, as nothing beside it declares a deployment"
 
 
-def _vuln_words(r: dict, where: bool, warning: bool) -> str:
-    """One vulnerable row: name, version, one advisory id, its score, its fix or that none is published, what
-    the lock and the imports say of its reach, its lock file when the finding has several, and why a
-    critical score is a warning here (WHY_WARNING, always last)."""
+def _vuln_parts(r: dict) -> tuple:
+    """One vulnerable row as (which, facts): name, version and one advisory id, then its score, its fix or
+    that none is published, and what the lock and the imports say of its reach."""
     ref = findings._malicious_id(r) or next(iter(list(r.get("aliases") or []) + list(r.get("ids") or [])), "")
     floating = findings._floating(r)
     if floating and r.get("requirement") is not None:
@@ -166,27 +179,87 @@ def _vuln_words(r: dict, where: bool, warning: bool) -> str:
     else:
         text = f"{r['name']} {r['version']}"
     text += f" ({ref})" if ref else ""
+    facts = []
     if r.get("malicious"):
-        text += ", malicious"
+        facts.append("malicious")
     elif r.get("score") is not None:
-        text += f", CVSS {r['score']:.1f}"
-    text += f", fixed in {r['fixed']}" if r.get("fixed") else "" if r.get("malicious") else ", no fix published"
+        facts.append(f"CVSS {r['score']:.1f}")
+    if r.get("fixed"):
+        facts.append(f"fixed in {r['fixed']}")
+    elif not r.get("malicious"):
+        facts.append("no fix published")
     if r.get("runtime") is False:
-        text += ", a dev dependency" + (" nothing imports" if r.get("imported") is False else "")
+        facts.append("a dev dependency" + (" nothing imports" if r.get("imported") is False else ""))
     elif r.get("imported") is False:
-        text += ", imported by no tracked file"
-    text += f", in {r['source']}" if where else ""
-    if warning and not floating and r.get("score") is not None and r["score"] >= findings.CRITICAL_SCORE and not r.get("deploys"):
-        text += WHY_WARNING
-    return text
+        facts.append("imported by no tracked file")
+    return text, ", ".join(facts)
+
+
+def _vuln_words(r: dict, where: bool = False) -> str:
+    """'websocket-driver 0.7.4 (CVE-2026-54466), CVSS 9.2, fixed in 0.7.5, a dev dependency nothing imports',
+    with its lock file when asked."""
+    which, facts = _vuln_parts(r)
+    return which + (f", {facts}" if facts else "") + (f", in {r['source']}" if where else "")
+
+
+def _vuln_list(rows: list) -> str:
+    """The rows of one lock file in words. Rows that share every fact are named together and the facts said
+    once ('A 1.55.8 (CVE-2020-8911) and B 0.56.0 (GO-2026-5932); for both, no fix published, imported by no
+    tracked file'), which is how prometheus's two packages in the lock a Dockerfile builds fit one entry."""
+    parts = [_vuln_parts(r) for r in rows]
+    if len(rows) > 1 and parts[0][1] and len({facts for _, facts in parts}) == 1:
+        return f"{textfmt.join_and([which for which, _ in parts])}; for {'both' if len(rows) == 2 else 'each'}, {parts[0][1]}"
+    return "; ".join(_vuln_words(r) for r in rows)
+
+
+def _unshipped_critical(r: dict) -> bool:
+    """A score in the critical band on a row that does not make the finding critical, since nothing declares
+    that its lock ships (findings._vuln_critical): what a reader of "CVSS 9.2" under a ▲ has to be told."""
+    return not findings._floating(r) and r.get("score") is not None and r["score"] >= findings.CRITICAL_SCORE and not r.get("deploys") and not r.get("malicious")
+
+
+def _ships_words(reasons: list) -> str:
+    """', which Dockerfile ships', or ', which Dockerfile and 88 more ship': the first thing that declares the
+    lock's deployment (deps.deploys, sorted) and how many more do."""
+    more = len(reasons) - 1
+    return f", which {reasons[0]}" + (f" and {more:,} more ship" if more else " ships")
+
+
+def _vuln_group(head: str, rows: list, why: bool, width: int) -> tuple:
+    """(lines, rows named) for one lock file: `head`, then as many of `rows` as VULN_GROUP_LINES lines hold,
+    in _vuln_list's words, the rest counted ("and 28 more there"), and WHY_WARNING last when the group holds
+    the critical score that is a warning. The first row is always named; the reason gives way whole before
+    a package's own facts are cut."""
+    def said(k, reason, counted=True):
+        listed = _vuln_list(rows[:k]) + (f" and {len(rows) - k:,} more there" if counted and len(rows) > k else "")
+        return short_version((f"{head}: " if head else "") + listed + (WHY_WARNING if reason else ""))
+    tries = [(k, reason, True) for reason in ([True, False] if why else [False]) for k in range(len(rows), 0, -1)]
+    out = []
+    for k, reason, counted in tries + [(1, False, False)]:   # last, the first row without the count of the rest, which the remainder line holds
+        out = wrap(said(k, reason, counted), width, width - len(HANG))
+        if len(out) <= VULN_GROUP_LINES:
+            break
+    out = cap(out, VULN_GROUP_LINES, width - len(HANG))
+    return [out[0]] + [HANG + x for x in out[1:]], rows[:k]
 
 
 def _vulnerable(f: dict, report: dict, ctx: dict):
-    """'28 packages in 43 places across 5 lock files' and the one row the advice names (findings._vuln_first):
-    the count, the lock files, the worst package, the step. The note for lock files under tests, examples and
-    vendored code is one sentence and no step, three lines with its title. The rows are the rule's own
-    (findings._vuln_rows), since the evidence holds the first ten in reach order and the advice's row need
-    not be among them."""
+    """'28 packages in 43 places across 5 lock files. By lock file:', then the lock files that make the
+    finding matter, path first and whole, in a fixed order: the one a deploy declaration ships (the first in
+    the rule's order) with its packages, the one holding the highest score, the one holding the package the
+    step names (findings._vuln_first); then 'and N more packages: dependencies.json'. A lock file is one
+    group, printed once: on prometheus the highest score and the step's pick are the same package, and that
+    is two groups, not three. Every package named carries one advisory id, its fix or that none is published,
+    and what the lock and the imports say of its reach; the group with a critical score that is a warning
+    says why. prometheus's report named neither the package scoring 9.2 nor the two in the one lock file a
+    Dockerfile builds, which have nothing to upgrade to. With one lock file there is one group and no path
+    in front of it, since the statement names the file.
+
+    The cap is VULN_GROUPS groups of VULN_GROUP_LINES lines and the remainder line: the one finding whose
+    subject block is not held to SUBJECT_LINES. The note for lock files under tests, examples and vendored
+    code is one sentence and no step, three lines with its title. The rows are the rule's own
+    (findings._vuln_rows), since the evidence holds the first ten in reach order and the rows named here
+    need not be among them."""
     group = next((g for rid, _, _, g in findings._vuln_rows(report or {}) if rid == f["rule"]["id"]), None)
     if not group:
         return None
@@ -206,19 +279,40 @@ def _vulnerable(f: dict, report: dict, ctx: dict):
     else:
         lead = range_words + (f" in {sources[0]}" if len(sources) == 1 else "")
     scores = [r["score"] for r in pool if r.get("score") is not None]
-    label = ("" if len(pool) == 1 else "Malicious" if worst.get("malicious")
-             else "Highest" if worst.get("score") is not None and worst["score"] == max(scores)
-             else "First to fix" if worst.get("fixed") else "First")
-    words = _vuln_words(worst, len(sources) > 1, f["severity"] == "warning")
-    named = short_version(f"{label}: {words}" if label else words)
     if aside:
+        label = ("" if len(pool) == 1 else "Malicious" if worst.get("malicious")
+                 else "Highest" if worst.get("score") is not None and worst["score"] == max(scores)
+                 else "First to fix" if worst.get("fixed") else "First")
+        named = short_version(f"{label}: {_vuln_words(worst, len(sources) > 1)}" if label else _vuln_words(worst, len(sources) > 1))
         return {"statement": f"{lead}{'. ' if label else ': '}{named}", "subjects": None, "step": None}
+    shipped = next((r for r in pool if r.get("deploys")), None)
+    highest = max(pool, key=lambda r: r["score"] if r.get("score") is not None else -1) if scores else None   # the first of equals, in the rule's order
+    keys = [r for r in (highest, worst) if r is not None]
+    several = len({r["source"] for r in pool}) > 1
+    order = []   # the lock files, in the fixed order: shipped, highest score, the step's
+    for r in ([shipped] if shipped else []) + keys:
+        if r["source"] not in order:
+            order.append(r["source"])
+    warning = f["severity"] == "warning"
+    inner = ctx["width"] - 2
+    subjects, said = [], []
+    for src in order[:VULN_GROUPS]:
+        rows = [r for i, r in enumerate(keys) if r["source"] == src and r not in keys[:i]]
+        ships = shipped["deploys"] if shipped and shipped["source"] == src else None
+        if ships:   # every package of the lock that ships, the ones the other groups would name first
+            rows += [r for r in pool if r["source"] == src and r not in rows]
+        head = (src + (_ships_words(ships) if ships else "")) if several else ""
+        why = warning and any(_unshipped_critical(r) for r in rows)
+        lines, named = _vuln_group(head, rows, why, inner)
+        subjects += lines
+        said += named
+    left = len({r["name"] for r in pool} - {r["name"] for r in said})
+    if left:
+        subjects.append(f"and {textfmt.count(left, 'more package')}: {DEPENDENCIES_FILE}")
+    statement = lead + (_ships_words(shipped["deploys"]) if shipped and not several else "") + (". By lock file:" if several else "")
     advice = f["advice"]
     target = advice[:-len(findings.IGNORE_DEPS)].rstrip() if advice.endswith(findings.IGNORE_DEPS) else None
-    inner = ctx["width"] - 2
-    if len(wrap(named, inner)) > SUBJECT_LINES and named.endswith(WHY_WARNING):
-        named = named[:-len(WHY_WARNING)]   # the reason gives way before the package's own facts are cut
-    return {"statement": lead, "subjects": cap(wrap(named, inner), SUBJECT_LINES, inner), "step": f"{target} {IGNORE_DEPS_SHORT}" if target else advice}
+    return {"statement": statement, "subjects": subjects, "step": f"{target} {IGNORE_DEPS_SHORT}" if target else advice}
 
 
 def _bug_magnets(f: dict, report: dict, ctx: dict):
@@ -397,9 +491,150 @@ def _truck_factor(f: dict, report: dict, ctx: dict):
     return {"statement": statement, "subjects": subjects, "step": step}
 
 
+# --- the rules not measured yet (findings.UNJUDGED) ------------------------------------------------------
+#
+# One statement each: the count and the rule's numbers, then the subject the rule's own advice picks, which is
+# not always the first the long statement lists (the debt finding lists hotspots in rank order and advises
+# the one with the most markers). A note of these prints as that statement alone (compact); a warning prints
+# it with its step, like any other finding.
+
+def _lead(f: dict) -> str:
+    """What the rule's statement says before its list: the count and the thresholds, in the rule's words."""
+    return textfmt._statement_and_advice(f)[0].partition(": ")[0]
+
+
+def _deep_nesting(f: dict, report: dict, ctx: dict):
+    """'147 functions nest 5 levels or more or carry 3 or more separate nested chunks. Worst: eval at
+    promql/engine.go:2132, nested 6 deep': the function the advice names, which is the first in a top hotspot
+    when the finding is a warning for one, and the deepest by cognitive complexity otherwise. Past the ten
+    functions of the evidence the advice's own cannot be described, and the first is named with the advice
+    whole."""
+    ev, rule = f["evidence"], f["rule"]
+    n, rows = ev["count"], ev["functions"]
+
+    def which(fn):
+        return f"the anonymous function at {fn['file']}:{fn['start']}" if findings._anonymous(fn) else f"{fn['name']} in {fn['file']}"
+    picked = next((fn for fn in rows if f["advice"].startswith(f"Flatten {which(fn)} first:")), None)
+    fn = picked or rows[0]
+    called = f"the anonymous function at {fn['file']}:{fn['start']}" if findings._anonymous(fn) else f"{fn['name']} at {fn['file']}:{fn['start']}"
+    how = f"nested {fn['nesting']} deep" if fn["nesting"] >= rule["min_nesting"] else f"{fn['bumps']} nested chunks"
+    label = "Worst" if fn is rows[0] else "In a top hotspot"
+    statement = (f"{textfmt.count(n, 'function')} {_is(n, 'nests', 'nest')} {rule['min_nesting']} levels or more or {_is(n, 'carries', 'carry')} "
+                 f"{rule['min_bumps']} or more separate nested chunks. {label}: {called}, {how}")
+    said = f"Flatten {which(fn)} first: return early and move each nested chunk into a function of its own."
+    return {"statement": statement, "subjects": None,
+            "step": "Flatten it first: return early, move each nested chunk into a function." if picked and f["advice"] == said else f["advice"]}
+
+
+def _debt_in_hotspots(f: dict, report: dict, ctx: dict):
+    """'8 of the top 10 hotspots carry TODO, FIXME, XXX or HACK comments; most in
+    storage/remote/queue_manager.go (10)': the file with the most markers, which is the one the advice names
+    and on prometheus the seventh the statement lists."""
+    rows = f["evidence"]["files"]
+    top = max(rows, key=lambda r: r["markers"])   # the first of equals, as the rule takes it
+    return {"statement": f"{_lead(f)}{'; most in' if len(rows) > 1 else ':'} {top['file']} ({top['markers']:,})", "subjects": None, "step": f["advice"]}
+
+
+def _same_pair(p: dict, q: dict) -> bool:
+    return {p["a"], p["b"]} == {q["a"], q["b"]}
+
+
+def _said_above(f: dict, pair: dict, ctx: dict) -> bool:
+    """Whether Files that always change together, printed above this finding, already names `pair` as its one
+    subject (_tight_coupling names its first pair when it has no directory to name)."""
+    found = ctx.get("found") or []
+    at = next((i for i, x in enumerate(found) if x is f), None)
+    for x in found[:at] if at is not None else []:
+        ev = x.get("evidence") or {}
+        if (x.get("rule") or {}).get("id") == "tight_coupling" and not ev.get("clusters") and ev.get("pairs"):
+            return _same_pair(ev["pairs"][0], pair)
+    return False
+
+
+def _hidden_coupling(f: dict, report: dict, ctx: dict):
+    """'1 pair, the one above; neither file imports the other' when Files that always change together has
+    just named it (prometheus printed format.tsx and serialize.ts twice, eight lines apart); else the pair
+    with its share. The evidence names ten pairs at most, and the statement counts the rest."""
+    ev, rule = f["evidence"], f["rule"]
+    pairs = ev["pairs"]
+    counted = _MORE.search(textfmt._statement_and_advice(f)[0])
+    n = (3 + int((counted.group(1) or counted.group(2)).replace(",", ""))) if counted else len(pairs)
+    p = pairs[0]
+    above = _said_above(f, p, ctx)
+    named = f"{_pair_words(p['a'], p['b'])}, {p['degree']}%"
+    if n == 1:
+        statement = ("1 pair, the one above; neither file imports the other" if above
+                     else f"1 pair changes together {rule['min_degree']}% of the time or more and neither file imports the other: {named}")
+    else:
+        statement = (f"{n:,} pairs change together {rule['min_degree']}% of the time or more with no import between the two files. "
+                     f"Highest: {'the one above' if above else named}")
+    return {"statement": statement, "subjects": None, "step": f["advice"]}
+
+
+def _loop_words(loop: list) -> str:
+    """'AlertContents.tsx and CollapsibleAlertPanel.tsx in web/ui/react-app/src/pages/alerts/' for two files
+    that import each other; a longer loop as the rule writes it, file → file → back."""
+    return _pair_words(loop[0], loop[1]) if len(loop) == 3 else " → ".join(loop)
+
+
+def _import_cycles(f: dict, report: dict, ctx: dict):
+    """'6 groups, the largest 16 files; its shortest loop: AlertContents.tsx and CollapsibleAlertPanel.tsx in
+    web/ui/react-app/src/pages/alerts/': the loop the advice says to break first, the largest group's."""
+    ev = f["evidence"]
+    n, g = ev["count"], ev["groups"][0]
+    size = f"{g['size']:,} files"
+    statement = (f"1 group of {size}" if n == 1 else f"{n:,} groups, the largest {size}") + f"; its shortest loop: {_loop_words(g['loop'])}"
+    return {"statement": statement, "subjects": None, "step": f["advice"]}
+
+
+def _unreferenced_files(f: dict, report: dict, ctx: dict):
+    """'3 files imported by nothing in the tree; first discovery/install/install.go', the one the advice says
+    to check before anything else."""
+    ev = f["evidence"]
+    n, first = ev["count"], ev["files"][0]
+    statement = f"{first}, imported by nothing in the tree" if n == 1 else f"{n:,} files imported by nothing in the tree; first {first}"
+    return {"statement": statement, "subjects": None, "step": f["advice"]}
+
+
+def _commented_out_code(f: dict, report: dict, ctx: dict):
+    """'4 source files hold 10 or more lines of commented-out code; most in src/a.py (40 lines from line
+    12)', the block the advice says to delete."""
+    rows = f["evidence"]["files"]
+    top = rows[0]
+    lead = _lead(f)
+    one = lead.startswith("1 ")
+    return {"statement": f"{lead}{':' if one else '; most in'} {top['file']} ({textfmt.count(top['lines'], 'line')} from line {top['start']:,})",
+            "subjects": None, "step": f["advice"]}
+
+
+def _hardcoded_addresses(f: dict, report: dict, ctx: dict):
+    """'12 IPv4 addresses in string literals in 5 source files; first 10.1.2.3 at src/net.py:8', the one the
+    advice says to move into configuration."""
+    ev = f["evidence"]
+    top = ev["files"][0]
+    return {"statement": f"{_lead(f)}{':' if ev['count'] == 1 else '; first'} {top['value']} at {top['file']}:{top['start']}", "subjects": None, "step": f["advice"]}
+
+
+def _swallowed_errors(f: dict, report: dict, ctx: dict):
+    """'9 empty catch blocks in 4 source files, 2 of them a bare except; first in a top hotspot: src/a.py:12
+    (3 there)', or 'most in' the file with the most when no hotspot holds one: the file the advice names."""
+    ev = f["evidence"]
+    rows, hot = ev["files"], ev.get("hotspots") or []
+    top = next((r for r in rows if hot and r["file"] == hot[0]), None)
+    if hot and top is None:   # the hotspot's row is past the ten the evidence names
+        return {"statement": f"{_lead(f)}; first in a top hotspot: {hot[0]}", "subjects": None, "step": f["advice"]}
+    top = top or rows[0]
+    label = "first in a top hotspot:" if hot else "most in" if len(rows) > 1 else "in"
+    there = f" ({top['count']:,} there)" if top.get("count", 1) > 1 and len(rows) > 1 else ""
+    return {"statement": f"{_lead(f)}; {label} {top['file']}:{top['start']}{there}", "subjects": None, "step": f["advice"]}
+
+
 FORMS = {"credential_files": _credential_files, "vulnerable_dependencies": _vulnerable, "vulnerable_dependencies_aside": _vulnerable,
          "bug_magnets": _bug_magnets, "brain_methods": _brain_methods, "tight_coupling": _tight_coupling,
-         "sweeping_commits": _sweeping_commits, "unused_dependencies": _unused_dependencies, "truck_factor": _truck_factor}
+         "sweeping_commits": _sweeping_commits, "unused_dependencies": _unused_dependencies, "truck_factor": _truck_factor,
+         "deep_nesting": _deep_nesting, "debt_in_hotspots": _debt_in_hotspots, "hidden_coupling": _hidden_coupling, "import_cycles": _import_cycles,
+         "unreferenced_files": _unreferenced_files, "commented_out_code": _commented_out_code, "hardcoded_addresses": _hardcoded_addresses,
+         "swallowed_errors": _swallowed_errors}
 
 
 # --- every other rule -----------------------------------------------------------------------------------
@@ -432,19 +667,26 @@ def _fallback(statement: str, width: int) -> dict:
     return {"statement": f"{lead}:", "subjects": subjects} if lead else {"statement": "\n".join(subjects), "subjects": None}
 
 
-def short(f: dict, report: dict = None, width: int = 74, printed: dict = None) -> dict:
+def _made(f: dict, report: dict, ctx: dict):
+    """The rule's own short form, or None: no form, no evidence, or evidence from before a key the form reads
+    existed (an older export, a hand-made dict), where the statement stands."""
+    form = FORMS.get((f.get("rule") or {}).get("id"))
+    if not (form and f.get("evidence") and f.get("advice")):
+        return None
+    try:
+        return form(f, report, ctx)
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None
+
+
+def short(f: dict, report: dict = None, width: int = 74, printed: dict = None, found: list = None) -> dict:
     """The finding as the default report prints it: {"statement": lines, "subjects": lines, "step": lines},
     each line at most `width` characters (the subjects and the step two fewer, for their indent). `printed`
-    is the report's sections by id, for the "(see Section)" pointer. A finding whose evidence lacks what its
+    is the report's sections by id, for the "(see Section)" pointer, and `found` the report's findings in
+    their order, for a note that restates a subject printed above it. A finding whose evidence lacks what its
     short form reads (an older export, a hand-made dict) takes the fallback, as a rule without one does."""
-    ctx = {"width": width, "printed": printed or {}}
-    form = FORMS.get((f.get("rule") or {}).get("id"))
-    made = None
-    if form and f.get("evidence") and f.get("advice"):
-        try:
-            made = form(f, report, ctx)
-        except (KeyError, IndexError, TypeError):
-            made = None   # evidence from before a key existed: the statement stands
+    ctx = {"width": width, "printed": printed or {}, "found": found or []}
+    made = _made(f, report, ctx)
     statement, advice = textfmt._statement_and_advice(f)
     marked = statement.startswith(BASELINE_MARK)
     if made is None:
@@ -455,3 +697,26 @@ def short(f: dict, report: dict = None, width: int = 74, printed: dict = None) -
     subjects = made.get("subjects") or []
     step = step_lines(short_version(made["step"]), width - 2) if made.get("step") else []
     return {"statement": lines, "subjects": [short_version(x) for x in subjects], "step": step}
+
+
+def compact(f: dict, report: dict = None, width: int = 74, lead: int = 0, printed: dict = None, found: list = None) -> list:
+    """A note from a rule not measured yet, as the lines after 'Title (not measured yet): ': its statement and
+    nothing else, in COMPACT_LINES lines at most, the first of them `lead` characters shorter since the title
+    and the tag are on it. No step: the rule's worth is not known, and the statement names the subject its
+    advice would. A finding with no form of its own, or without the evidence its form reads, gives the lead of
+    its statement and as much of its list as fits. When not even the statement's first word fits beside the
+    title, the first line is empty and the statement starts under it."""
+    ctx = {"width": width, "printed": printed or {}, "found": found or []}
+    made = _made(f, report, ctx)
+    statement = textfmt._statement_and_advice(f)[0]
+    marked = statement.startswith(BASELINE_MARK)
+    if made is None:
+        text = statement[len(BASELINE_MARK):] if marked else statement
+    else:
+        text = " ".join([made["statement"]] + list(made.get("subjects") or []))
+    text = (BASELINE_MARK if marked else "") + short_version(text)
+    first = width - lead
+    words = text.split(" ")
+    if first < len(words[0]):
+        return [""] + cap(wrap(text, width), COMPACT_LINES - 1, width)
+    return cap(wrap(text, first, width), COMPACT_LINES, width)

@@ -218,21 +218,89 @@ class Vulnerable(unittest.TestCase):
     def report(self, rows):
         return {"meta": {"name": "r"}, "dependencies": {"status": "scanned", "sources": [{"path": r["source"], "packages": 10} for r in rows], "packages": 99, "vulnerable": rows}}
 
-    def test_the_count_the_lock_files_the_package_the_advice_names_and_the_step(self):
+    def test_the_count_the_lock_file_of_the_highest_score_and_the_step(self):
         rows = [self.row("example.org/own/module", "0.307.4-0.20251119130332-1174b0ce4f1f", "compliance/go.mod", fixed="0.311.2-0.20260410083055-07c6232d159b", imported=True),
                 self.row("websocket-driver", "0.7.4", "web/pnpm-lock.yaml", score=9.2, fixed="0.7.5", runtime=False, imported=False),
                 self.row("moment", "2.30.1", "web/pnpm-lock.yaml", score=5.9, fixed="2.31.0"), self.row("moment", "2.30.1", "console/pnpm-lock.yaml", score=5.9, fixed="2.31.0")]
         r = self.report(rows)
         [f] = findings.vulnerable_dependencies(r)
         self.assertIn("0.307.4-0.20251119130332-1174b0ce4f1f", f["detail"], "the long statement keeps the version whole")
-        self.assertEqual(_text(f, r, 200), "3 packages in 4 places across 3 lock files\n"
-                                           "  Highest: websocket-driver 0.7.4 (CVE-2026-1), CVSS 9.2, fixed in 0.7.5, a dev dependency nothing imports, in web/pnpm-lock.yaml; "
-                                           "a warning, not critical, as nothing beside it declares a deployment\n"
+        self.assertEqual(_text(f, r, 200), "3 packages in 4 places across 3 lock files. By lock file:\n"
+                                           "  web/pnpm-lock.yaml: websocket-driver 0.7.4 (CVE-2026-1), CVSS 9.2, fixed in 0.7.5, a dev dependency nothing imports; "
+                                           "not critical, as nothing beside it declares a deployment\n"
+                                           "  and 2 more packages: dependencies.json\n"
                                            "↳ Upgrade websocket-driver to 0.7.5 in web/pnpm-lock.yaml first; it scores CVSS 9.2, the highest with a fix published. "
                                            "One that does not apply to this code can be ignored in osv-scanner.toml.")
+        self.assertEqual(_text(f, r, 200).count("web/pnpm-lock.yaml:"), 1, "the highest score and the step's pick are one package: its lock file is one group")
         narrow = brief.short(f, r, 74)
-        self.assertLessEqual(len(narrow["subjects"]), 3)
+        self.assertLessEqual(len(narrow["subjects"]), brief.VULN_GROUP_LINES + 1)
         self.assertNotIn("…", " ".join(narrow["subjects"]), "the reason gives way whole before the package's facts are cut")
+
+    def test_the_groups_are_the_lock_that_ships_the_highest_score_and_the_steps_pick_in_that_order(self):
+        """prometheus: the two packages in the one lock file a Dockerfile builds have nothing to upgrade to, and
+        the 9.2 was named nowhere. Here the three are three lock files."""
+        rows = [self.row("example.org/aws/sdk", "1.55.8", "go.mod", score=None, fixed=None, imported=False),
+                self.row("example.org/x/crypto", "0.56.0", "go.mod", score=None, fixed=None, imported=False),
+                self.row("websocket-driver", "0.7.4", "web/pnpm-lock.yaml", score=9.2, fixed=None, runtime=False, imported=False),
+                self.row("lodash", "4.17.15", "api/package-lock.json", score=8.0, fixed="4.17.21", imported=True),
+                self.row("moment", "2.30.1", "api/package-lock.json", score=5.9, fixed="2.31.0")]
+        r = {**self.report(rows), "tree": ["Dockerfile", "go.mod"]}
+        [f] = findings.vulnerable_dependencies(r)
+        self.assertEqual(f["severity"], "warning")
+        self.assertEqual(_text(f, r, 74), "5 packages in 3 lock files. By lock file:\n"
+                                          "  go.mod, which Dockerfile ships: example.org/aws/sdk 1.55.8 (CVE-2026-1)\n"
+                                          "    and example.org/x/crypto 0.56.0 (CVE-2026-1); for both, no fix\n"
+                                          "    published, imported by no tracked file\n"
+                                          "  web/pnpm-lock.yaml: websocket-driver 0.7.4 (CVE-2026-1), CVSS 9.2, no\n"
+                                          "    fix published, a dev dependency nothing imports; not critical, as\n"
+                                          "    nothing beside it declares a deployment\n"
+                                          "  api/package-lock.json: lodash 4.17.15 (CVE-2026-1), CVSS 8.0, fixed in\n"
+                                          "    4.17.21\n"
+                                          "  and 1 more package: dependencies.json\n"
+                                          "↳ Upgrade lodash to 4.17.21 in api/package-lock.json first; it scores CVSS\n"
+                                          "  8.0, the highest with a fix published. One that does not apply to this\n"
+                                          "  code can be ignored in osv-scanner.toml.")
+        for line in brief.short(f, r, 74)["subjects"]:
+            self.assertLessEqual(len(line), 72)
+
+    def test_the_block_is_three_groups_of_three_lines_and_the_remainder_whatever_the_lock_files_hold(self):
+        """The one finding whose subjects are not held to brief.SUBJECT_LINES has a cap of its own, so it cannot
+        grow with the number of lock files or of packages."""
+        rows = ([self.row(f"example.org/a/module{i}", "1.0.0", "go.mod", score=5.0 + i / 10, imported=False) for i in range(30)]
+                + [self.row(f"pkg{i}", "1.0.0", f"web{i}/pnpm-lock.yaml", score=9.2 - i / 10, fixed=None if i == 0 else "2.0.0", runtime=False) for i in range(12)])
+        r = {**self.report(rows), "tree": ["Dockerfile", "go.mod"]}
+        [f] = findings.vulnerable_dependencies(r)
+        for width in (40, 74, 100):
+            s = brief.short(f, r, width)["subjects"]
+            self.assertLessEqual(len(s), brief.VULN_GROUPS * brief.VULN_GROUP_LINES + 1, width)
+            self.assertRegex(s[-1], r"^and \d+ more packages: dependencies\.json$")
+            self.assertTrue(width == 40 or all(len(x) <= width - 2 for x in s), width)   # at 40 a package's name is longer than a line
+        s = brief.short(f, r, 74)["subjects"]
+        self.assertEqual([x.split(":")[0] for x in s if not x.startswith((brief.HANG, "and "))],
+                         ["go.mod, which Dockerfile ships", "web0/pnpm-lock.yaml", "web1/pnpm-lock.yaml"])
+        self.assertIn(" and 29 more there", " ".join(s), "the lock that ships counts the packages it does not name")
+        self.assertEqual(s[-1], "and 39 more packages: dependencies.json", "42 names, three of them named")
+
+    def test_a_critical_finding_names_its_lock_file_once_and_gives_no_reason_for_a_warning(self):
+        rows = [self.row("left-pad", "1.0.0", "package-lock.json", score=9.8, fixed="1.0.1"), self.row("moment", "2.30.1", "web/pnpm-lock.yaml", score=5.9, fixed="2.31.0")]
+        r = {**self.report(rows), "tree": ["Dockerfile", "package-lock.json"]}
+        [f] = findings.vulnerable_dependencies(r)
+        self.assertEqual(f["severity"], "critical")
+        self.assertEqual(brief.short(f, r, 200)["subjects"],
+                         ["package-lock.json, which Dockerfile ships: left-pad 1.0.0 (CVE-2026-1), CVSS 9.8, fixed in 1.0.1", "and 1 more package: dependencies.json"])
+
+    def test_one_lock_file_is_one_group_with_no_path_in_front(self):
+        rows = [self.row("left-pad", "1.0.0", "package-lock.json", score=7.8, fixed="1.0.1"), self.row("a", "1.0.0", "package-lock.json", score=5.0),
+                self.row("b", "1.0.0", "package-lock.json", score=9.5, fixed=None)]
+        r = self.report(rows)
+        [f] = findings.vulnerable_dependencies(r)
+        s = brief.short(f, r, 200)
+        self.assertEqual(s["statement"], ["3 packages in package-lock.json"])
+        self.assertEqual(s["subjects"], ["b 1.0.0 (CVE-2026-1), CVSS 9.5, no fix published; left-pad 1.0.0 (CVE-2026-1), CVSS 7.8, fixed in 1.0.1; "
+                                         "not critical, as nothing beside it declares a deployment", "and 1 more package: dependencies.json"])
+        r = {**self.report(rows[:2]), "tree": ["Dockerfile"]}
+        [f] = findings.vulnerable_dependencies(r)
+        self.assertEqual(brief.short(f, r, 200)["statement"], ["2 packages in package-lock.json, which Dockerfile ships"])
 
     def test_a_pseudo_version_is_short_on_both_sides_in_the_default_form_only(self):
         r = self.report([self.row("example.org/own/module", "0.307.4-0.20251119130332-1174b0ce4f1f", "compliance/go.mod", fixed="0.311.2-0.20260410083055-07c6232d159b")])
@@ -404,6 +472,117 @@ class Fallback(unittest.TestCase):
                     self.assertLessEqual(len(s["subjects"]), brief.SUBJECT_LINES, rid)
                     self.assertLessEqual(len(s["step"]), brief.STEP_LINES, rid)
                     self.assertTrue(all(len(x) <= width for x in s["statement"] + s["subjects"] + s["step"]), (rid, width, s))
+
+
+class Unmeasured(unittest.TestCase):
+    """The rules in findings.UNJUDGED: a note of theirs is one statement beside its title (brief.compact), a
+    warning an entry like any other, and either names the subject the rule's own advice picks."""
+
+    def f(self, rid, statement, advice, evidence, severity="info", **rule):
+        f = _f(rid, statement, advice, evidence, severity=severity, **rule)
+        f["unjudged"] = True
+        return f
+
+    def said(self, f, report=None, width=200, found=None):
+        return " ".join(brief.compact(f, report or {}, width, 0, None, found))
+
+    def test_every_unmeasured_rule_has_a_form_of_its_own(self):
+        self.assertEqual(set(findings.UNJUDGED) - set(brief.FORMS), set())
+
+    def test_deep_nesting_names_the_function_the_advice_names(self):
+        rows = [{"file": "promql/engine.go", "name": "eval", "start": 2132, "nesting": 6, "cognitive": 262, "bumps": 1},
+                {"file": "discovery/aws/rds.go", "name": "(anonymous at line 542)", "start": 542, "nesting": 3, "cognitive": 259, "bumps": 3}]
+        f = self.f("deep_nesting", "147 functions nest 5 levels or more or carry 3 or more separate nested chunks: eval (promql/engine.go:2132) nested 6 deep and 146 more.",
+                   "Flatten eval in promql/engine.go first: return early and move each nested chunk into a function of its own.",
+                   {"count": 147, "functions": rows}, severity="warning", min_nesting=5, min_bumps=3)
+        self.assertEqual(_text(f, {}, 74), "147 functions nest 5 levels or more or carry 3 or more separate nested\n"
+                                           "chunks. Worst: eval at promql/engine.go:2132, nested 6 deep\n"
+                                           "↳ Flatten it first: return early, move each nested chunk into a function.")
+        hot = {**f, "advice": "Flatten the anonymous function at discovery/aws/rds.go:542 first: return early and move each nested chunk into a function of its own."}
+        hot["detail"] = f["detail"][:-len(f["advice"])] + hot["advice"]
+        self.assertIn("In a top hotspot: the anonymous function at discovery/aws/rds.go:542, 3 nested chunks", _text(hot, {}, 200),
+                      "the first in a top hotspot is not the deepest, and it met the rule by its chunks")
+        gone = {**f, "advice": "Flatten other in far/away.go first: return early and move each nested chunk into a function of its own."}
+        gone["detail"] = f["detail"][:-len(f["advice"])] + gone["advice"]
+        s = brief.short(gone, {}, 200)
+        self.assertIn("Worst: eval at promql/engine.go:2132", s["statement"][0])
+        self.assertEqual(s["step"], [gone["advice"]], "past the evidence's ten the advice stands whole")
+
+    def test_debt_names_the_file_with_the_most_markers_not_the_first_listed(self):
+        files = [{"file": "promql/engine.go", "markers": 7}, {"file": "storage/remote/queue_manager.go", "markers": 10}, {"file": "tsdb/head_append.go", "markers": 10}]
+        f = self.f("debt_in_hotspots", "8 of the top 10 hotspots carry TODO, FIXME, XXX or HACK comments: promql/engine.go (7); cmd/prometheus/main.go (3) and 6 more.",
+                   "Resolve or ticket the markers in storage/remote/queue_manager.go first, starting at line 751; it changes often.", {"files": files})
+        self.assertEqual(self.said(f), "8 of the top 10 hotspots carry TODO, FIXME, XXX or HACK comments; most in storage/remote/queue_manager.go (10)")
+
+    def test_a_pair_printed_above_is_the_one_above(self):
+        pair = {"a": "web/ui/src/promql/format.tsx", "b": "web/ui/src/promql/serialize.ts", "degree": 86, "revs": 7}
+        hidden = self.f("hidden_coupling", f"{pair['a']} and {pair['b']} change together 86% of the time, and neither imports the other.",
+                        f"Look at why {pair['a']} and {pair['b']} move together: a shared format.", {"pairs": [pair]}, min_degree=60)
+        tight = _f("tight_coupling", "1 pair.", "Review them.", {"pairs": [{**pair, "a": pair["b"], "b": pair["a"]}], "clusters": []}, min_degree=80)
+        self.assertEqual(self.said(hidden, found=[tight, hidden]), "1 pair, the one above; neither file imports the other")
+        alone = "1 pair changes together 60% of the time or more and neither file imports the other: format.tsx and serialize.ts in web/ui/src/promql/, 86%"
+        self.assertEqual(self.said(hidden), alone, "nothing above it")
+        self.assertEqual(self.said(hidden, found=[hidden, tight]), alone, "printed below it is not above")
+        other = _f("tight_coupling", "1 pair.", "Review them.", {"pairs": [{**pair, "a": "x.py"}], "clusters": []}, min_degree=80)
+        self.assertEqual(self.said(hidden, found=[other, hidden]), alone, "another pair")
+        grouped = _f("tight_coupling", "1 dir.", "Review them.", {"pairs": [pair], "clusters": [{"dir": "web/", "files": 4}]}, min_degree=80)
+        self.assertEqual(self.said(hidden, found=[grouped, hidden]), alone, "the finding above named a directory, not the pair")
+        many = self.f("hidden_coupling", "a and b change together 86% of the time, and neither imports the other; c and d …; e and f … (4 more pairs like them).",
+                      "Look at why.", {"pairs": [pair]}, min_degree=60)
+        self.assertEqual(self.said(many, found=[tight, many]), "7 pairs change together 60% of the time or more with no import between the two files. Highest: the one above")
+
+    def test_import_cycles_names_the_largest_groups_shortest_loop(self):
+        loop = ["web/src/pages/alerts/AlertContents.tsx", "web/src/pages/alerts/CollapsibleAlertPanel.tsx", "web/src/pages/alerts/AlertContents.tsx"]
+        f = self.f("import_cycles", "In 6 groups, files import each other as they load: a → b → a, one loop in a group of 16 files (3 more groups).", "Break a → b → a first: move.",
+                   {"count": 6, "groups": [{"files": loop[:2], "size": 16, "loop": loop}]})
+        self.assertEqual(self.said(f), "6 groups, the largest 16 files; its shortest loop: AlertContents.tsx and CollapsibleAlertPanel.tsx in web/src/pages/alerts/")
+        f = self.f("import_cycles", "In 1 group, files import each other as they load: a.py → b.py → c.py → a.py.", "Break it first: move.",
+                   {"count": 1, "groups": [{"files": ["a.py", "b.py", "c.py"], "size": 3, "loop": ["a.py", "b.py", "c.py", "a.py"]}]})
+        self.assertEqual(self.said(f), "1 group of 3 files; its shortest loop: a.py → b.py → c.py → a.py")
+
+    def test_the_other_four_name_what_their_advice_names(self):
+        f = self.f("unreferenced_files", "3 files are imported by nothing in the tree and are no entry point: a.go, b.ts and c.ts.", "Check a.go before anything else.", {"count": 3, "files": ["a.go", "b.ts", "c.ts"]})
+        self.assertEqual(self.said(f), "3 files imported by nothing in the tree; first a.go")
+        f = self.f("unreferenced_files", "1 file is imported by nothing in the tree and is no entry point: a.go.", "Check a.go before anything else.", {"count": 1, "files": ["a.go"]})
+        self.assertEqual(self.said(f), "a.go, imported by nothing in the tree")
+        f = self.f("commented_out_code", "4 source files hold 10 or more lines of commented-out code: src/a.py (40 lines from line 12), src/b.py (11 lines from line 3) and 2 more.",
+                   "Delete the block at src/a.py:12; git keeps the old version.", {"files": [{"file": "src/a.py", "start": 12, "lines": 40}, {"file": "src/b.py", "start": 3, "lines": 11}]})
+        self.assertEqual(self.said(f), "4 source files hold 10 or more lines of commented-out code; most in src/a.py (40 lines from line 12)")
+        f = self.f("hardcoded_addresses", "12 IPv4 addresses in string literals in 5 source files: 10.1.2.3 at src/net.py:8 and 11 more.", "Move 10.1.2.3 in src/net.py into configuration.",
+                   {"count": 12, "files": [{"file": "src/net.py", "start": 8, "value": "10.1.2.3"}]})
+        self.assertEqual(self.said(f), "12 IPv4 addresses in string literals in 5 source files; first 10.1.2.3 at src/net.py:8")
+        files = [{"file": "src/a.py", "start": 12, "count": 3}, {"file": "src/b.py", "start": 3, "count": 1}]
+        f = self.f("swallowed_errors", "9 empty catch blocks in 4 source files, 2 of them a bare except: src/a.py:12 and 2 more there, src/b.py:3 and 2 more.", "Log or rethrow in src/a.py first.",
+                   {"count": 9, "bare_except": 2, "hotspots": [], "files": files})
+        self.assertEqual(self.said(f), "9 empty catch blocks in 4 source files, 2 of them a bare except; most in src/a.py:12 (3 there)")
+        f = self.f("swallowed_errors", "9 empty catch blocks in 4 source files: src/a.py:12 and 2 more there, src/b.py:3 and 2 more. src/b.py is a top hotspot.", "Log or rethrow in src/b.py first.",
+                   {"count": 9, "bare_except": 0, "hotspots": ["src/b.py"], "files": files}, severity="warning")
+        self.assertEqual(brief.short(f, {}, 200)["statement"], ["9 empty catch blocks in 4 source files; first in a top hotspot: src/b.py:3"])
+
+    def test_a_compact_note_is_three_lines_at_most_whatever_the_rule_and_the_width(self):
+        listing = "; ".join(f"src/package{i}/module{i}.py (a reason given at some length, {i} times over)" for i in range(12))
+        for rid in sorted(findings.UNJUDGED):
+            for evidence in ({}, {"count": 3}):
+                f = self.f(rid, f"12 things were found by a rule with a threshold of 5 or more: {listing} and 30 more. A closing sentence.", "Do the first thing first.", evidence)
+                for width in (40, 74, 100):
+                    for lead in (0, 30, 60):
+                        lines = brief.compact(f, {}, width, lead)
+                        self.assertLessEqual(len(lines), brief.COMPACT_LINES, rid)
+                        self.assertTrue(all(len(x) <= width for x in lines), (rid, width, lines))
+                        self.assertLessEqual(len(lines[0]), max(width - lead, 0), (rid, width, lead, lines))
+        self.assertEqual(brief.compact(self.f("x", "internationalisation matters.", "Act.", {}), {}, 40, 35), ["", "internationalisation matters"],
+                         "a first word that does not fit beside the title starts under it")
+
+    def test_the_panel_prints_a_note_compact_and_a_warning_whole(self):
+        note = self.f("unreferenced_files", "3 files are imported by nothing in the tree and are no entry point: discovery/install/install.go, b.ts and c.ts.",
+                      "Check discovery/install/install.go before anything else.", {"count": 3, "files": ["discovery/install/install.go", "b.ts", "c.ts"]}, title="Possibly unreferenced files")
+        text = [line.strip("│ ").rstrip() for line in _panel([note], {}).splitlines()]
+        self.assertEqual(text[1:3], ["● Possibly unreferenced files (not measured yet): 3 files imported by", "nothing in the tree; first discovery/install/install.go"])
+        self.assertNotIn("↳", " ".join(text))
+        measured = {k: v for k, v in note.items() if k != "unjudged"}
+        text = " ".join(_panel([measured], {}).split())
+        self.assertNotIn("not measured yet", text)
+        self.assertIn("↳ Check discovery/install/install.go before anything else.", text, "a rule that has been measured prints as any other")
 
 
 class Panel(unittest.TestCase):
