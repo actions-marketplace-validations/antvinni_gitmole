@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import re
 
+from rich.cells import cell_len
+
 from . import deps, findings, textfmt
 
 ELLIPSIS = textfmt.ELLIPSIS
@@ -25,14 +27,15 @@ SUBJECT_LINES = 3       # the subject lines of one finding, a hard cap, with the
 # number of lock files.
 VULN_GROUPS = 3
 VULN_GROUP_LINES = 3
-HANG = "  "             # a subject entry's continuation, in from its first line
+HANG = "  "             # marks a subject line as the continuation of the one above (the renderer aligns it under that line's text)
+SUBJECT_INDENT = 4      # a subject line, in from the statement: two of indent and the subject's mark with its space
+WIDOW = 16              # a wrapped text's last line is at least this long, or two words, when the line above can spare them
 DEPENDENCIES_FILE = "dependencies.json"   # the osv-scanner step's file in the output directory, where the packages not named are
 STEP_LINES = 3          # the step's lines
 WHOLE_LINES = 3         # a statement this short has no need of a short form
 BASELINE_MARK = "In the baseline: "   # gate.BASELINE_MARK, which --baseline puts in front of a finding's detail
 # After the title of a finding from a rule in findings.UNJUDGED, in either shape; the Findings title glosses it once.
 UNMEASURED_TAG = "(not measured yet)"
-COMPACT_LINES = 3       # a note from such a rule: title, tag and statement in this many lines, and no step
 IGNORE_DEPS_SHORT = "One that does not apply to this code can be ignored in osv-scanner.toml."
 
 # A Go pseudo-version, by its shape: a base version, a 14-digit commit time, a 12-character commit
@@ -49,10 +52,12 @@ def short_version(text: str) -> str:
 
 
 def wrap(text: str, width: int, rest: int = None) -> list:
-    """`text` as lines of at most `width` characters, broken at spaces only: a path, a hash, a package or a
+    """`text` as lines of at most `width` cells (a wide character is two, as a terminal draws it), broken at spaces only: a path, a hash, a package or a
     version is never split (one longer than a line is left whole on a line of its own), a separator stays at
     the end of the line before it, and what a no-break space joins stays together. With `rest`, the lines
-    after the first are at most that wide: an entry whose continuation is indented."""
+    after the first are at most that wide: an entry whose continuation is indented. A last line of one word,
+    or shorter than WIDOW, takes words from the line above while that line stays the longer of the two and
+    the last fits ("had no / author left", not "had no author / left"): the number of lines is the same."""
     words = []
     for w in text.split(" "):
         if not w:
@@ -61,16 +66,27 @@ def wrap(text: str, width: int, rest: int = None) -> list:
             words[-1] += " " + w
         else:
             words.append(w)
-    lines, line = [], ""
+    lines, line = [], []
     for w in words:
-        if line and len(line) + 1 + len(w) > (width if rest is None or not lines else rest):
+        if line and cell_len(" ".join(line)) + 1 + cell_len(w) > (width if rest is None or not lines else rest):
             lines.append(line)
-            line = w
+            line = [w]
         else:
-            line = f"{line} {w}" if line else w
+            line.append(w)
     if line:
         lines.append(line)
-    return [x.replace(NBSP, " ") for x in lines]
+    if len(lines) > 1:
+        above, last = lines[-2], lines[-1]
+        room = width if rest is None else rest
+        while len(above) > 1 and (len(last) < 2 or cell_len(" ".join(last)) < WIDOW):
+            moved = [above[-1]] + last
+            if not any(c.isalnum() for c in above[-1]):   # an arrow or a dash ends the line it is on, not starts the next
+                break
+            if cell_len(" ".join(moved)) > room or cell_len(" ".join(above[:-1])) < cell_len(" ".join(moved)):
+                break
+            above, last = above[:-1], moved
+        lines[-2:] = [above, last]
+    return [" ".join(x).replace(NBSP, " ") for x in lines]
 
 
 def cap(lines: list, n: int, width: int) -> list:
@@ -86,17 +102,21 @@ def cap(lines: list, n: int, width: int) -> list:
 
 def most(n: int, said, width: int, lines: int = SUBJECT_LINES, keys=None, least: int = 1) -> list:
     """The lines of said(k) for the largest k of n subjects that fit in `lines` lines, said(k) being the text
-    naming the first k and counting the rest. With `keys` (each subject's count) the cut never falls between
-    two subjects with the same count: it moves back to before the tie, since naming one of two files fixed
-    six times each and hiding the other says the first is worse (prometheus's discovery/oci/oci.go and
-    scrape/scrape_append_v2.go). When not even `least` fit, said(least) is cut at the cap."""
+    naming the first k and counting the rest, the lines after the first marked with HANG as its continuation.
+    With `keys` (each subject's count) the cut never falls between two subjects with the same count: it moves
+    back to before the tie, since naming one of two files fixed six times each and hiding the other says the
+    first is worse (prometheus's discovery/oci/oci.go and scrape/scrape_append_v2.go). When not even `least`
+    fit, said(least) is wrapped whole: a subject is never cut in the middle of its text."""
+    out = None
     for k in range(n, least - 1, -1):
         if keys and 0 < k < len(keys) and keys[k - 1] == keys[k]:
             continue
         out = wrap(said(k), width)
         if len(out) <= lines:
-            return out
-    return cap(wrap(said(least), width), lines, width)
+            break
+    else:
+        out = wrap(said(least), width)
+    return [out[0]] + [HANG + x for x in out[1:]] if out else []
 
 
 def _is(n: int, one: str, many: str) -> str:
@@ -110,7 +130,7 @@ def _count(n: int, word: str, plural: str = None, capped: bool = False) -> str:
 
 def step_lines(advice: str, width: int) -> list:
     """The step in at most STEP_LINES lines: whole when it fits, else without its last sentences, else
-    without the last clauses of its first, else cut."""
+    without the last clauses of its first, else its first clause whole however many lines it takes."""
     out = wrap(advice, width)
     if len(out) <= STEP_LINES:
         return out
@@ -126,7 +146,7 @@ def step_lines(advice: str, width: int) -> list:
         out = wrap("; ".join(clauses).rstrip(".") + ".", width)
         if len(out) <= STEP_LINES:
             return out
-    return cap(wrap(sentences[0], width), STEP_LINES, width)
+    return wrap(clauses[0].rstrip(".") + ".", width)   # its first clause, whole however many lines it takes: a step is never cut in the middle
 
 
 # --- the rules with a short form of their own ---------------------------------------------------------
@@ -158,7 +178,7 @@ def _credential_files(f: dict, report: dict, ctx: dict):
         statement, subjects = f"{lead}: {files[0]}" + (f". {found}" if found else ""), None
     else:
         statement = lead + (f". {found}" if found else "")
-        subjects = most(len(files), lambda k: ", ".join(files[:k]) + (f" and {n - k:,} more" if n > k else ""), ctx["width"] - 2)
+        subjects = most(len(files), lambda k: ", ".join(files[:k]) + (f" and {n - k:,} more" if n > k else ""), ctx["width"] - SUBJECT_INDENT)
     step = (f"If {_is(n, 'it holds', 'one holds')} a login, move the values to the environment and git rm the {_is(n, 'file', 'files')}; "
             "a template belongs in .env.example.") if clean else f["advice"]
     return {"statement": statement, "subjects": subjects, "step": step}
@@ -229,18 +249,17 @@ def _vuln_group(head: str, rows: list, why: bool, width: int) -> tuple:
     """(lines, rows named) for one lock file: `head`, then as many of `rows` as VULN_GROUP_LINES lines hold,
     in _vuln_list's words, the rest counted ("and 28 more there"), and WHY_WARNING last when the group holds
     the critical score that is a warning. The first row is always named; the reason gives way whole before
-    a package's own facts are cut."""
+    a package's own facts are said in more lines."""
     def said(k, reason, counted=True):
         listed = _vuln_list(rows[:k]) + (f" and {len(rows) - k:,} more there" if counted and len(rows) > k else "")
         return short_version((f"{head}: " if head else "") + listed + (WHY_WARNING if reason else ""))
     tries = [(k, reason, True) for reason in ([True, False] if why else [False]) for k in range(len(rows), 0, -1)]
     out = []
     for k, reason, counted in tries + [(1, False, False)]:   # last, the first row without the count of the rest, which the remainder line holds
-        out = wrap(said(k, reason, counted), width, width - len(HANG))
+        out = wrap(said(k, reason, counted), width)
         if len(out) <= VULN_GROUP_LINES:
             break
-    out = cap(out, VULN_GROUP_LINES, width - len(HANG))
-    return [out[0]] + [HANG + x for x in out[1:]], rows[:k]
+    return [out[0]] + [HANG + x for x in out[1:]], rows[:k]   # the first row alone may take more lines: it is never cut
 
 
 def _vulnerable(f: dict, report: dict, ctx: dict):
@@ -294,7 +313,7 @@ def _vulnerable(f: dict, report: dict, ctx: dict):
         if r["source"] not in order:
             order.append(r["source"])
     warning = f["severity"] == "warning"
-    inner = ctx["width"] - 2
+    inner = ctx["width"] - SUBJECT_INDENT
     subjects, said = [], []
     for src in order[:VULN_GROUPS]:
         rows = [r for i, r in enumerate(keys) if r["source"] == src and r not in keys[:i]]
@@ -348,7 +367,7 @@ def _bug_magnets(f: dict, report: dict, ctx: dict):
             listed = (": " + ", ".join(names[:k]) + (f" and {hot - k:,} more" if hot > k else "")) if k else ""
             return f"{hot:,} at {warn} or more{listed}{rest}"
         return ("Most fixed: " + ", ".join(names[:k]) + (f" and {n - k:,} more" if n > k else "")) if k else ""
-    subjects = most(hot if hot and known else len(files), said, ctx["width"] - 2, keys=keys, least=0)
+    subjects = most(hot if hot and known else len(files), said, ctx["width"] - SUBJECT_INDENT, keys=keys, least=0)
     return {"statement": statement, "subjects": subjects, "step": f["advice"]}
 
 
@@ -482,7 +501,7 @@ def _truck_factor(f: dict, report: dict, ctx: dict):
             if k == len(names) and not capped:
                 return head + textfmt.join_and(names)
             return head + ", ".join(names[:k]) + (" and more" if capped else f" and {len(names) - k:,} more")
-        subjects = most(len(names), said, ctx["width"] - 2)
+        subjects = most(len(names), said, ctx["width"] - SUBJECT_INDENT)
     step = f["advice"]
     for a in areas:
         if step.startswith(f"Pair someone with {a['author']} on {a['area']} first;") and not a.get("new_since"):
@@ -495,7 +514,7 @@ def _truck_factor(f: dict, report: dict, ctx: dict):
 #
 # One statement each: the count and the rule's numbers, then the subject the rule's own advice picks, which is
 # not always the first the long statement lists (the debt finding lists hotspots in rank order and advises
-# the one with the most markers). A note of these prints as that statement alone (compact); a warning prints
+# the one with the most markers). A note of these prints as that statement without its step; a warning prints
 # it with its step, like any other finding.
 
 def _lead(f: dict) -> str:
@@ -647,14 +666,19 @@ def _fallback(statement: str, width: int) -> dict:
     fewer; else the lead (what comes before the first colon of its first sentence: the count and the rule's
     numbers) and at most SUBJECT_LINES lines of the list after it, cut between two entries and closed with
     'and N more', N counting the entries dropped here and the ones the statement had already counted. The
-    sentences after the list are in --full."""
+    sentences after the list are in --full. A list joined by "; " is cut between two entries; one with no "; "
+    is cut at a comma outside brackets (Hotspots getting more complex: 'path (+267%, code +31%), ...'), where
+    the whole list cut at the line's end used to stop in the middle of an entry."""
     if len(wrap(statement, width)) <= WHOLE_LINES:
         return {"statement": statement, "subjects": None}
     head = textfmt._SENTENCE_END.split(statement.strip())[0].rstrip(".")
     lead, colon, listing = head.partition(": ")
     if not colon:
         lead, listing = "", head
-    items = listing.split("; ")
+    joint = "; "
+    items = listing.split(joint)
+    if len(items) == 1:   # a list of one kind, joined by commas: cut between two of them, never inside brackets
+        joint, items = ", ", _outside_brackets(listing, ", ")
     counted = _MORE.search(items[-1])
     already = int((counted.group(1) or counted.group(2)).replace(",", "")) if counted else 0
     if counted:
@@ -662,9 +686,26 @@ def _fallback(statement: str, width: int) -> dict:
 
     def said(k):
         rest = len(items) - k + already
-        return "; ".join(items[:k]) + (f" and {rest:,} more" if rest else "")
-    subjects = most(len(items), said, width - 2 if lead else width)
-    return {"statement": f"{lead}:", "subjects": subjects} if lead else {"statement": "\n".join(subjects), "subjects": None}
+        return joint.join(items[:k]) + (f" and {rest:,} more" if rest else "")
+    if lead:
+        return {"statement": f"{lead}:", "subjects": most(len(items), said, width - SUBJECT_INDENT)}
+    return {"statement": "\n".join(x[len(HANG):] if x.startswith(HANG) else x for x in most(len(items), said, width)), "subjects": None}
+
+
+def _outside_brackets(text: str, joint: str) -> list:
+    """`text` split at each `joint` that is not inside brackets: 'a (+4%, code +3%), b (+2%)' is two items."""
+    out, depth, start, i = [], 0, 0, 0
+    while i < len(text):
+        c = text[i]
+        depth += c in "([{"
+        depth -= c in ")]}"
+        if depth == 0 and text.startswith(joint, i):
+            out.append(text[start:i])
+            i += len(joint)
+            start = i
+            continue
+        i += 1
+    return out + [text[start:]]
 
 
 def _made(f: dict, report: dict, ctx: dict):
@@ -716,7 +757,7 @@ def long(f: dict, width: int = 74) -> dict:
     rest = made["rest"] + max(len(made["subjects"]) - LONG_SUBJECTS, 0)
     subjects = []
     for item in made["subjects"][:LONG_SUBJECTS]:
-        lines = wrap(item, width - 2, width - 2 - len(HANG))
+        lines = wrap(item, width - SUBJECT_INDENT)
         subjects += [lines[0]] + [HANG + x for x in lines[1:]]
     if rest:
         subjects.append(f"and {rest:,} more")
@@ -744,26 +785,3 @@ def parts(f: dict) -> dict:
         items[-1] = items[-1][:counted.start()]
     return {"statement": (BASELINE_MARK if marked else "") + lead + ":", "subjects": items, "rest": rest,
             "more": " ".join(sentences[1:]) if len(sentences) > 1 else ""}
-
-
-def compact(f: dict, report: dict = None, width: int = 74, lead: int = 0, printed: dict = None, found: list = None) -> list:
-    """A note from a rule not measured yet, as the lines after 'Title (not measured yet): ': its statement and
-    nothing else, in COMPACT_LINES lines at most, the first of them `lead` characters shorter since the title
-    and the tag are on it. No step: the rule's worth is not known, and the statement names the subject its
-    advice would. A finding with no form of its own, or without the evidence its form reads, gives the lead of
-    its statement and as much of its list as fits. When not even the statement's first word fits beside the
-    title, the first line is empty and the statement starts under it."""
-    ctx = {"width": width, "printed": printed or {}, "found": found or []}
-    made = _made(f, report, ctx)
-    statement = textfmt._statement_and_advice(f)[0]
-    marked = statement.startswith(BASELINE_MARK)
-    if made is None:
-        text = statement[len(BASELINE_MARK):] if marked else statement
-    else:
-        text = " ".join([made["statement"]] + list(made.get("subjects") or []))
-    text = (BASELINE_MARK if marked else "") + short_version(text)
-    first = width - lead
-    words = text.split(" ")
-    if first < len(words[0]):
-        return [""] + cap(wrap(text, width), COMPACT_LINES - 1, width)
-    return cap(wrap(text, first, width), COMPACT_LINES, width)

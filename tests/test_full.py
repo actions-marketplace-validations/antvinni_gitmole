@@ -47,10 +47,11 @@ class Shape(unittest.TestCase):
         listed = mk("Brain methods", "9 functions are both long and complex: one (a.py) complexity 20; two (b.py) complexity 19; three (c.py) complexity 18; four (d.py) complexity 17; "
                     "five (e.py) complexity 16; six (f.py) complexity 15 and 3 more. They are measured by lizard.", "Split one first.")
         text = full(findings=[listed] + found())
-        self.assertIn("▲ Brain methods\n  9 functions are both long and complex:\n    one (a.py) complexity 20\n    two (b.py) complexity 19\n    three (c.py) complexity 18\n"
-                      "    four (d.py) complexity 17\n    five (e.py) complexity 16\n    and 4 more\n  They are measured by lizard\n  ↳ Split one first.\n", text,
+        self.assertIn("▲ Brain methods\n  9 functions are both long and complex:\n    · one (a.py) complexity 20\n    · two (b.py) complexity 19\n    · three (c.py) complexity 18\n"
+                      "    · four (d.py) complexity 17\n    · five (e.py) complexity 16\n    · and 4 more\n  They are measured by lizard\n  ↳ Split one first.\n", text,
                       "the fact, five subjects a line each, the rest counted with the ones the statement had counted, what the statement adds, the step")
-        self.assertEqual(len([line for line in text.split("\n\n")[1].splitlines() if line[:1] in "✖▲●"]), 5, "every finding, each with its own mark")
+        block = text[text.index("\nFindings"):text.index("\n◎ ")]
+        self.assertEqual(len([line for line in block.splitlines() if line and line[0] in "✖▲●"]), 5, "every finding, each with its own mark")
         self.assertIn("● Debt the authors flagged in hotspots (not measured yet)\n  8 of the top 10 hotspots carry TODO or FIXME comments; most in\n  static/index.html (10)\n  ↳ Ticket it.", text,
                       "a statement that is no list is whole, and a note from a rule not measured yet keeps its step")
 
@@ -59,7 +60,8 @@ class Shape(unittest.TestCase):
              "advice": "", "rule": {"id": "r"}}
         made = render.brief.long(f, 74)
         self.assertEqual(made["statement"], ["2 pairs:"])
-        self.assertEqual(made["subjects"][:2], ["services/gateway/internal/transport/middleware/authentication/a1.go and", "  b1.go change together 91% of the time"])
+        self.assertEqual(made["subjects"][:2], ["services/gateway/internal/transport/middleware/authentication/a1.go", "  and b1.go change together 91% of the time"],
+                         "the line it wraps to marked as its continuation, and no lone word on it")
 
 
 class Capped(unittest.TestCase):

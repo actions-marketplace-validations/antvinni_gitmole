@@ -46,17 +46,34 @@ then what the part holds two columns in. A table is its column heads, a rule
 exactly as wide as its columns, a row a line and its caption; the header,
 the Supply chain section and Since last report are grids of labelled rows,
 a value that does not fit wrapped under its own start; the Findings are
-entries, each with its mark at column 1, its statement at column 3, its
-subject lines at column 5 and its step under `↳`. One blank line between
-two parts, none inside one, and no line ends in a space.
+entries, each with its mark at column 1 and its title on that line, its
+statement under it at column 3, each subject behind a `·` at column 5 with
+the lines it wraps to under its text, and its step behind `↳` at column 3
+with the lines it wraps to under the step's text. One blank line between
+two parts and between two findings, none elsewhere, and no line ends in a
+space.
+
+The page has one width: the terminal's, or 110 columns on a wider one. The
+header, every finding, every table with its rule and caption, and the
+closing lines are laid out to it, so the page has one right margin; 0.45.0
+wrapped the findings at 102 and let the rest run to the terminal's edge. At
+110 the univer report's watch list keeps every cell whole, which it does not
+at 100, and 74 of the 85 default tables of the sixteen 0.45.0 measurement
+runs and univer print at their natural width. Wrapped prose leaves no lone
+word on its last line: a last line of one word, or shorter than 16
+characters, takes words from the line above while that line stays the longer
+(`had no author left` on the last line, not `left` alone). A finding's text
+is never cut with `…`: a subject or a step longer than its lines is wrapped
+whole.
 
 The colours are four styles and no more: bold (a part's name, a table's
 first column, and in the header the commit count and a `--since` window or
 `--path` scope), dim (labels, column heads, rules, captions, the closing
-lines, the `(not measured yet)` tag), yellow for a warning and red for a
+lines, the `(not measured yet)` tag, a subject's `·`), yellow for a warning and red for a
 critical, on the finding's mark and title and on a scan's verdict in the
-Supply chain section. A note has no colour, and neither has a statement, a step or a
-number, so the report reads the same on a light theme as on a dark one.
+Supply chain section. Every finding's title is bold, a note's too, so each
+stands out from the text under it. A note's mark has no colour, and neither
+has a statement, a step or a number, so the report reads the same on a light theme as on a dark one.
 (The logo banner keeps its own colours and is only drawn on a terminal.)
 Without colour (`NO_COLOR`, a pipe, a file) the report is the same bytes
 with the escapes left out.
@@ -243,7 +260,10 @@ Reinartz gone`, `2019-01 gone`); blank means active.
      numbers are said in the finding.
    - Any other finding has three subject lines at most, indented under its
      statement. A list that is cut says `and N more`, and is never cut
-     between two subjects with the same count. Bug magnets counts its
+     between two subjects with the same count, nor inside a subject: a list
+     joined by commas is cut at a comma outside brackets, and a single
+     subject or step longer than its lines is wrapped whole, never ended
+     with `…`. Bug magnets counts its
      files on either side of its warning threshold, so the parts sum to the
      total: `7 at 5 or more: promql/engine.go 10, ... · 11 at 3 or 4`.
    - Vulnerable dependencies is the one exception to the three lines: its
@@ -295,10 +315,11 @@ Reinartz gone`, `2019-01 gone`); blank means active.
    yet`, or in fewer words (`5 not measured for precision yet`, `5 not
    measured yet`) where the title would be longer than the line. A warning
    or a critical from such a rule is an entry like any other. A note from
-   one is compact in the default report: the title, the tag, a colon and
-   one statement, three lines at most and no step (`● Possibly
-   unreferenced files (not measured yet): 3 files imported by nothing in
-   the tree; first discovery/install/install.go`). The statement names
+   one has the same shape with no step: the title and the tag on the
+   mark's line and the statement under it (`● Possibly unreferenced files
+   (not measured yet)`, then `3 files imported by nothing in the tree;
+   first discovery/install/install.go`); 0.45.0 put the statement on the
+   title's line after a colon, a second shape in one list. The statement names
    the subject the rule's own advice picks, which need not be the first
    the long statement lists: the hotspot with the most TODO markers, the
    largest import group's shortest loop, the function in a top hotspot.

@@ -12,13 +12,14 @@ severity on the title line of the Findings under it. When people commit (the bus
 `--full`'s Activity table.
 
 **Findings.** What the rules flagged, worst first. `✖` is critical, `▲` a warning, `●` a note: the mark is the
-first character of a finding's first line, so the marks can be counted against the title. Each
-finding states the facts, and the line starting `↳` names the file, area or person to start with.
+first character of a finding's title line, so the marks can be counted against the title. A blank line
+separates two findings. Each finding states the facts under its title, the lines starting `·` are the files,
+packages or areas it names, and the line starting `↳` names the file, area or person to start with.
 The facts are the short form: how many, against which thresholds, and the worst one, with `(see Complex
 functions)` where a table below lists the rest. `--full` lays each finding out with the subjects it names, a line each.
 
 - *"(not measured yet)"* after a finding's title: a newer rule nobody has checked against real repositories
-  yet. Treat it as a lead, not a verdict. A note of this kind is one statement with no step; the Findings title
+  yet. Treat it as a lead, not a verdict. A note of this kind has its statement and no step; the Findings title
   says how many there are (*5 by rules not measured for precision yet*).
 
 **Tables.** They come in one order at every terminal width, code first and people after: Watch list, Complex

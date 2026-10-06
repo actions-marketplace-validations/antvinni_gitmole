@@ -100,6 +100,15 @@ def every_render():
                 yield (width, full, colour), drawn(width, full, colour)
 
 
+
+def findings_lines(text: str) -> list:
+    """The Findings of a rendered report, its title line first: from the first blank line to the next part's
+    title, a line at column 1 that is no entry's mark. Two entries have a blank line between them."""
+    lines = text.splitlines()
+    block = lines[lines.index("") + 1:]
+    end = next(i for i, line in enumerate(block) if i and line and line[0] not in " ✖▲●·")
+    return block[:end - 1] if block[end - 1] == "" else block[:end]
+
 class NoBoxes(unittest.TestCase):
     def test_a_block_is_a_title_at_column_one_and_its_content_two_columns_in(self):
         lines = drawn(80).splitlines()
@@ -116,15 +125,16 @@ class NoBoxes(unittest.TestCase):
 
     def test_every_finding_owns_one_mark_at_column_one(self):
         for full in (False, True):
-            lines = drawn(80, full).splitlines()
-            block = lines[lines.index("") + 1:]
-            block = block[:block.index("")]
-            self.assertEqual([line[0] for line in block[1:] if line[0] != " "], ["✖", "▲", "●", "●", "·"], "four findings, and what was not computed last")
+            block = findings_lines(drawn(80, full))
+            self.assertEqual([line[0] for line in block[1:] if line and line[0] != " "], ["✖", "▲", "●", "●", "·"], "four findings, and what was not computed last")
+            starts = [i for i, line in enumerate(block) if line[:1] in ("✖", "▲", "●", "·")]
+            self.assertTrue(all(block[i - 1] == "" for i in starts[1:]), "a blank line before every entry but the first")
+            self.assertEqual(block[starts[0] - 1][:8], "Findings", "and none between the title and the first")
 
     def test_a_title_longer_than_the_terminal_wraps_under_itself(self):
         lines = drawn(60).splitlines()
         at = next(i for i, line in enumerate(lines) if line.startswith("▲ "))
-        self.assertEqual(lines[at:at + 2], ["▲ Vulnerable dependencies only in test, example or vendored", "  lock files"])
+        self.assertEqual(lines[at:at + 2], ["▲ Vulnerable dependencies only in test, example or", "  vendored lock files"], "and its last line is not one word")
 
 
 class OneRender(unittest.TestCase):
@@ -144,20 +154,29 @@ class OneRender(unittest.TestCase):
                 self.assertLessEqual(codes, {"0", "1", "2", "31", "33"}, what)   # reset, bold, dim, red, yellow: no italic (3), cyan (36), blue (34), green (32)
                 seen |= set(SGR.findall(text))
                 self.assertEqual(SGR.sub("", text).count("\x1b"), 0, "and no other escape")
-        self.assertEqual(seen, {"0", "1", "2", "33", "1;31"}, "reset, bold, dim, a warning's yellow and a critical's bold red, and no other combination")
+        self.assertEqual(seen, {"0", "1", "2", "33", "1;33", "1;31"}, "reset, bold, dim, a warning's yellow (bold on its title) and a critical's bold red, and no other combination")
 
     def test_severity_colour_is_on_the_mark_and_title_only(self):
         text = drawn(80, colour=True)
-        self.assertIn("\x1b[1;31m✖ Secrets in source\x1b[0m\n  1 value in config/settings.py, still at HEAD\n  ↳ Rotate it", text,
+        self.assertIn("\x1b[1;31m✖\x1b[0m \x1b[1;31mSecrets in source\x1b[0m\n  1 value in config/settings.py, still at HEAD\n  ↳ Rotate it", text,
                       "the statement and the step in the terminal's own foreground")
-        self.assertIn("\n● Sweeping commits\n", text, "a note's mark and title have no colour")
-        self.assertIn("● Debt the authors flagged in hotspots\x1b[2m (not measured yet)\x1b[0m: 8 of the top 10", text, "the tag dim, and nothing coloured before it")
+        self.assertIn("\n● \x1b[1mSweeping commits\x1b[0m\n", text, "a note's mark has no colour and its title is bold, as every title is")
+        self.assertIn("● \x1b[1mDebt the authors flagged in hotspots\x1b[0m\x1b[2m (not measured yet)\x1b[0m\n  8 of the top 10", text,
+                      "the tag dim, and the statement under the title as every entry's")
         self.assertIn("\x1b[1m◎ Watch list\x1b[0m · ", text, "a section's name bold in the default foreground, its qualifier plain")
         self.assertIn("\x1b[1mdemo\x1b[0m · branch main", text)
         self.assertRegex(text, r"\n  \x1b\[2mfile +changes +fixes[^\n\x1b]*\x1b\[0m\n  \x1b\[2m─+\x1b\[0m\n  \x1b\[1m[^\x1b]+\x1b\[0m +[\d,]+ [^\x1b]*\n", "heads and rule dim, a row's first cell bold, its numbers plain")
 
 
 class Lines(unittest.TestCase):
+    def test_the_page_has_one_width_on_a_wide_terminal(self):
+        """0.45.0 wrapped the findings at 102 and drew the header, the rules and the captions to the terminal's
+        edge: two right margins on one 125-column page."""
+        for width in (125, 200):
+            lines = drawn(width).splitlines()
+            self.assertLessEqual(max(len(line) for line in lines if DEEP not in line), render.PAGE_WIDTH, width)
+            self.assertEqual(drawn(width), drawn(render.PAGE_WIDTH), "past the page's width a wider terminal changes nothing")
+
     def test_no_line_of_any_render_ends_in_a_space(self):
         for what, text in every_render():
             self.assertEqual([line for line in SGR.sub("", text).split("\n") if line != line.rstrip()], [], what)
@@ -186,9 +205,7 @@ class Lines(unittest.TestCase):
 
     def test_a_path_is_whole_in_a_finding_and_elided_only_in_a_table(self):
         for width in WIDTHS:
-            lines = drawn(width).splitlines()
-            block = lines[lines.index("") + 1:]
-            block = block[:block.index("")]
+            block = findings_lines(drawn(width))
             self.assertIn(DEEP, " ".join(block), width)
             self.assertNotIn("…", " ".join(block), "no ellipsis in the Findings")
         watch = drawn(80).split("◎ Watch list")[1].split("\n\n")[0]
@@ -293,7 +310,7 @@ class Ascii(unittest.TestCase):
         self.assertIn("x Secrets in source", lines)
         self.assertIn("  > Rotate it, then remove it from the history.", lines)
         self.assertIn("# Watch list - all 3, ranked by changes x lines of code", lines)
-        self.assertEqual(lines[1:3], ["  history  363 commits - 2025-08-20 -> 2026-09-10 - since 2025-01-01 -", "           2 identities"])
+        self.assertEqual(lines[1:3], ["  history  363 commits - 2025-08-20 -> 2026-09-10 - since", "           2025-01-01 - 2 identities"])
         self.assertTrue(any(set(line.strip()) == {"-"} and len(line) > 20 for line in lines), "a rule of hyphens")
         self.assertTrue(any(".../token_validator.go" in line for line in lines), "an elided path")
         self.assertTrue(any(line.startswith("  Bj?rn Rabenstein") for line in lines), "a name it cannot carry does not stop the report")

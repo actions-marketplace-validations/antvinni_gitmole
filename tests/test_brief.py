@@ -19,7 +19,13 @@ def _f(rid, statement, advice, evidence=None, severity="info", title="A title", 
 
 def _text(f, report=None, width=74, printed=None):
     s = brief.short(f, report, width, printed)
-    return "\n".join(s["statement"] + ["  " + x for x in s["subjects"]] + (["↳ " + "\n  ".join(s["step"])] if s["step"] else []))
+    subjects = ["    " + x[len(brief.HANG):] if x.startswith(brief.HANG) else "  · " + x for x in s["subjects"]]   # as render._subjects lays them out
+    return "\n".join(s["statement"] + subjects + (["↳ " + "\n  ".join(s["step"])] if s["step"] else []))
+
+
+def _joined(lines):
+    """Subject lines as one text: a continuation line's HANG is how the renderer knows it, not a space of the text."""
+    return " ".join(x.strip() for x in lines)
 
 
 def _block(found, report=None, full=False, width=80, printed=None):
@@ -30,6 +36,18 @@ def _block(found, report=None, full=False, width=80, printed=None):
 
 
 class Shapes(unittest.TestCase):
+    def test_a_wrapped_text_leaves_no_lone_word_on_its_last_line(self):
+        """univer's Truck factor ended "had no / author left" at 100 columns; a list ended on "files" or "71%"."""
+        text = "2 people would have to leave before 2,427 of the 4,825 source files (50%) had no author left"
+        self.assertEqual(brief.wrap(text, 90), ["2 people would have to leave before 2,427 of the 4,825 source files (50%)", "had no author left"],
+                         "the last line takes words from the line above until it is WIDOW long, and the number of lines is the greedy wrap's")
+        self.assertEqual(brief.wrap("one two three four five six seven eight nine ten", 44), ["one two three four five six", "seven eight nine ten"])
+        self.assertEqual(brief.wrap("one two three", 50), ["one two three"], "one line has no last line to fix")
+        self.assertEqual(brief.wrap("a/very/long/path/to/a/file.go → b.go", 31), ["a/very/long/path/to/a/file.go →", "b.go"],
+                         "an arrow ends its line; it is not a word to pull down")
+        self.assertEqual(brief.wrap("aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii x", 44, 4), ["aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii", "x"],
+                         "a word that would not fit on the last line stays above")
+
     def test_a_go_pseudo_version_keeps_its_base_and_its_commit(self):
         self.assertEqual(brief.short_version("0.307.4-0.20251119130332-1174b0ce4f1f"), "0.307.4-0.…-1174b0ce4f1f")
         self.assertEqual(brief.short_version("fixed in v0.0.0-20260410083055-07c6232d159b)"), "fixed in v0.0.0-…-07c6232d159b)")
@@ -60,8 +78,9 @@ class Shapes(unittest.TestCase):
         self.assertEqual(" ".join(brief.step_lines(advice, 50)), "Do the first thing in the place named here; or do the other thing over there instead. A second sentence that explains why at some length.")
         self.assertEqual(" ".join(brief.step_lines(advice, 40)), "Do the first thing in the place named here; or do the other thing over there instead.")
         self.assertEqual(" ".join(brief.step_lines(advice, 30)), "Do the first thing in the place named here.")
-        self.assertEqual(len(brief.step_lines(advice, 8)), brief.STEP_LINES)
-        self.assertTrue(brief.step_lines(advice, 8)[-1].endswith("…"))
+        narrow = brief.step_lines(advice, 8)
+        self.assertEqual(" ".join(narrow), "Do the first thing in the place named here.", "past the last clause the step is wrapped whole, not cut")
+        self.assertFalse(any("…" in x for x in narrow))
 
 
 class BugMagnets(unittest.TestCase):
@@ -79,14 +98,14 @@ class BugMagnets(unittest.TestCase):
         f = self.finding(fix_rate={"fixes": 1726, "changes": 12434, "files": 700, "above_rate": []}, new_in_window=["discovery/oci/oci.go"])
         s = brief.short(f, {}, 100)
         self.assertEqual(s["statement"], ["18 files were fixed 3 or more times in 6 months; no file more often than is usual for its size"])
-        self.assertEqual(" ".join(s["subjects"]), "7 at 5 or more: promql/engine.go 10, promql/functions.go 9, tsdb/head.go 8, tsdb/db.go 8, "
+        self.assertEqual(_joined(s["subjects"]), "7 at 5 or more: promql/engine.go 10, promql/functions.go 9, tsdb/head.go 8, tsdb/db.go 8, "
                                                   "discovery/oci/oci.go 6 (new in the window), scrape/scrape_append_v2.go 6, tsdb/head_read.go 5 · 11 at 3 or 4")
         self.assertEqual(s["step"], ["Review promql/engine.go and promql/functions.go before the next release."])
 
     def test_a_list_too_long_for_three_lines_stops_before_a_tie_and_still_sums(self):
         s = brief.short(self.finding(), {}, 60)
         self.assertLessEqual(len(s["subjects"]), 3)
-        said = " ".join(s["subjects"])
+        said = _joined(s["subjects"])
         self.assertEqual(said, "7 at 5 or more: promql/engine.go 10, promql/functions.go 9, tsdb/head.go 8, tsdb/db.go 8 and 3 more · 11 at 3 or 4",
                          "oci.go fits and scrape_append_v2.go does not, and both were fixed 6 times: neither is named")
         named = said.split(": ")[1].split(" and ")[0].count(",") + 1
@@ -227,15 +246,15 @@ class Vulnerable(unittest.TestCase):
         [f] = findings.vulnerable_dependencies(r)
         self.assertIn("0.307.4-0.20251119130332-1174b0ce4f1f", f["detail"], "the long statement keeps the version whole")
         self.assertEqual(_text(f, r, 200), "3 packages in 4 places across 3 lock files. By lock file:\n"
-                                           "  web/pnpm-lock.yaml: websocket-driver 0.7.4 (CVE-2026-1), CVSS 9.2, fixed in 0.7.5, a dev dependency nothing imports; "
+                                           "  · web/pnpm-lock.yaml: websocket-driver 0.7.4 (CVE-2026-1), CVSS 9.2, fixed in 0.7.5, a dev dependency nothing imports; "
                                            "not critical, as nothing beside it declares a deployment\n"
-                                           "  and 2 more packages: dependencies.json\n"
+                                           "  · and 2 more packages: dependencies.json\n"
                                            "↳ Upgrade websocket-driver to 0.7.5 in web/pnpm-lock.yaml first; it scores CVSS 9.2, the highest with a fix published. "
                                            "One that does not apply to this code can be ignored in osv-scanner.toml.")
         self.assertEqual(_text(f, r, 200).count("web/pnpm-lock.yaml:"), 1, "the highest score and the step's pick are one package: its lock file is one group")
         narrow = brief.short(f, r, 74)
         self.assertLessEqual(len(narrow["subjects"]), brief.VULN_GROUP_LINES + 1)
-        self.assertNotIn("…", " ".join(narrow["subjects"]), "the reason gives way whole before the package's facts are cut")
+        self.assertNotIn("…", _joined(narrow["subjects"]), "the reason gives way whole before the package's facts are cut")
 
     def test_the_groups_are_the_lock_that_ships_the_highest_score_and_the_steps_pick_in_that_order(self):
         """prometheus: the two packages in the one lock file a Dockerfile builds have nothing to upgrade to, and
@@ -249,20 +268,20 @@ class Vulnerable(unittest.TestCase):
         [f] = findings.vulnerable_dependencies(r)
         self.assertEqual(f["severity"], "warning")
         self.assertEqual(_text(f, r, 74), "5 packages in 3 lock files. By lock file:\n"
-                                          "  go.mod, which Dockerfile ships: example.org/aws/sdk 1.55.8 (CVE-2026-1)\n"
-                                          "    and example.org/x/crypto 0.56.0 (CVE-2026-1); for both, no fix\n"
-                                          "    published, imported by no tracked file\n"
-                                          "  web/pnpm-lock.yaml: websocket-driver 0.7.4 (CVE-2026-1), CVSS 9.2, no\n"
+                                          "  · go.mod, which Dockerfile ships: example.org/aws/sdk 1.55.8\n"
+                                          "    (CVE-2026-1) and example.org/x/crypto 0.56.0 (CVE-2026-1); for both,\n"
+                                          "    no fix published, imported by no tracked file\n"
+                                          "  · web/pnpm-lock.yaml: websocket-driver 0.7.4 (CVE-2026-1), CVSS 9.2, no\n"
                                           "    fix published, a dev dependency nothing imports; not critical, as\n"
                                           "    nothing beside it declares a deployment\n"
-                                          "  api/package-lock.json: lodash 4.17.15 (CVE-2026-1), CVSS 8.0, fixed in\n"
-                                          "    4.17.21\n"
-                                          "  and 1 more package: dependencies.json\n"
+                                          "  · api/package-lock.json: lodash 4.17.15 (CVE-2026-1), CVSS 8.0,\n"
+                                          "    fixed in 4.17.21\n"
+                                          "  · and 1 more package: dependencies.json\n"
                                           "↳ Upgrade lodash to 4.17.21 in api/package-lock.json first; it scores CVSS\n"
                                           "  8.0, the highest with a fix published. One that does not apply to this\n"
                                           "  code can be ignored in osv-scanner.toml.")
         for line in brief.short(f, r, 74)["subjects"]:
-            self.assertLessEqual(len(line), 72)
+            self.assertLessEqual(len(line), 74 - brief.SUBJECT_INDENT)
 
     def test_the_block_is_three_groups_of_three_lines_and_the_remainder_whatever_the_lock_files_hold(self):
         """The one finding whose subjects are not held to brief.SUBJECT_LINES has a cap of its own, so it cannot
@@ -273,7 +292,9 @@ class Vulnerable(unittest.TestCase):
         [f] = findings.vulnerable_dependencies(r)
         for width in (40, 74, 100):
             s = brief.short(f, r, width)["subjects"]
-            self.assertLessEqual(len(s), brief.VULN_GROUPS * brief.VULN_GROUP_LINES + 1, width)
+            self.assertLessEqual(len([x for x in s if not x.startswith(brief.HANG)]), brief.VULN_GROUPS + 1, width)
+            if width > 40:   # at 40 a package's name and facts are longer than three lines, and are wrapped whole rather than cut
+                self.assertLessEqual(len(s), brief.VULN_GROUPS * brief.VULN_GROUP_LINES + 1, width)
             self.assertRegex(s[-1], r"^and \d+ more packages: dependencies\.json$")
             self.assertTrue(width == 40 or all(len(x) <= width - 2 for x in s), width)   # at 40 a package's name is longer than a line
         s = brief.short(f, r, 74)["subjects"]
@@ -308,7 +329,7 @@ class Vulnerable(unittest.TestCase):
         [f] = findings.vulnerable_dependencies(r)
         before = copy.deepcopy(f)
         text = _text(f, r, 200)
-        self.assertEqual(text, "1 package in compliance/go.mod\n  example.org/own/module 0.307.4-0.…-1174b0ce4f1f (CVE-2026-1), CVSS 7.5, fixed in 0.311.2-0.…-07c6232d159b\n"
+        self.assertEqual(text, "1 package in compliance/go.mod\n  · example.org/own/module 0.307.4-0.…-1174b0ce4f1f (CVE-2026-1), CVSS 7.5, fixed in 0.311.2-0.…-07c6232d159b\n"
                                "↳ Upgrade example.org/own/module to 0.311.2-0.…-07c6232d159b in compliance/go.mod first; it scores CVSS 7.5. "
                                "One that does not apply to this code can be ignored in osv-scanner.toml.")
         self.assertEqual(f, before, "the finding the JSON, the Markdown and --full read is not written to")
@@ -388,7 +409,7 @@ class TruckFactor(unittest.TestCase):
     def test_it_leads_with_what_the_number_means_and_keeps_the_areas_of_one(self):
         text = _text(self.finding(), self.report(), 200)
         self.assertEqual(text, "9 people would have to leave before 333 of the 653 source files (51%) had no author left; 1 of the 9 is already gone\n"
-                               "  In 3 areas one person leaving would be enough: web/ (Ann), plugins/ (Zed) and prompb/ (Hal gone, new since 2026-03)\n"
+                               "  · In 3 areas one person leaving would be enough: web/ (Ann), plugins/ (Zed) and prompb/ (Hal gone, new since 2026-03)\n"
                                "↳ Pair someone with Ann on web/ first: 128 of its 231 files would have no author left.")
         self.assertNotIn("halving", text)
         self.assertNotIn("Bob", text, "nine names are the People table's to give")
@@ -404,7 +425,7 @@ class TruckFactor(unittest.TestCase):
         many = [{"area": f"services/component-{i}/", "author": "Ann", "files": 20, "orphaned": 11} for i in range(9)]
         s = brief.short(self.finding(areas=many), self.report(), 74)
         self.assertLessEqual(len(s["subjects"]), 3)
-        self.assertRegex(" ".join(s["subjects"]), r"^In 9 areas one person leaving would be enough: services/component-0/ \(Ann\), .* and \d more$")
+        self.assertRegex(_joined(s["subjects"]), r"^In 9 areas one person leaving would be enough: services/component-0/ \(Ann\), .* and \d more$")
         ten = brief.short(self.finding(areas=many + many[:1]), self.report(), 400)["subjects"][0]
         self.assertTrue(ten.startswith("In 10 or more areas one person leaving would be enough: "))
         self.assertTrue(ten.endswith(" and more"))
@@ -432,9 +453,9 @@ class Fallback(unittest.TestCase):
         s = brief.short(f, {}, 74)
         self.assertEqual(" ".join(s["statement"]), "97 of 5,000 commits (2%) touch 10 or more files across 4 or more directories:")
         self.assertEqual(len(s["subjects"]), 3)
-        self.assertEqual(" ".join(s["subjects"]), "commit00 (25 files, 6 directories, a subject that lists several changes at once); "
+        self.assertEqual(_joined(s["subjects"]), "commit00 (25 files, 6 directories, a subject that lists several changes at once); "
                                                   "commit01 (25 files, 6 directories, a subject that lists several changes at once) and 95 more", "one dropped here and the 94 the statement counted")
-        self.assertNotIn("credits every file", " ".join(s["subjects"]), "the sentences after the list are --full's")
+        self.assertNotIn("credits every file", _joined(s["subjects"]), "the sentences after the list are --full's")
 
     def test_a_list_without_a_lead_and_one_entry_longer_than_the_cap(self):
         parts = [f"deploy/environments/region-{i}/service.lock resolved a package from a registry the configuration does not name" for i in range(6)]
@@ -443,8 +464,7 @@ class Fallback(unittest.TestCase):
                          "the second entry would be a fourth line, so the list stops after the first")
         self.assertEqual(s["subjects"], [], "with no lead the entries are the statement")
         one = brief.short(_f("hidden_coupling", " ".join(["word"] * 120) + ".", "Look."), {}, 74)
-        self.assertEqual(len(one["statement"]), 3)
-        self.assertTrue(one["statement"][-1].endswith("…"))
+        self.assertEqual(" ".join(one["statement"]), " ".join(["word"] * 120), "one entry longer than the cap is wrapped whole, never cut with an ellipsis")
 
     def test_the_baseline_mark_stays_in_front(self):
         f = _f("bus_factor", "Ann wrote 80% of the code that survives today.", "Pair someone with Ann before they are unavailable.")
@@ -476,8 +496,8 @@ class Fallback(unittest.TestCase):
 
 
 class Unmeasured(unittest.TestCase):
-    """The rules in findings.UNJUDGED: a note of theirs is one statement beside its title (brief.compact), a
-    warning an entry like any other, and either names the subject the rule's own advice picks."""
+    """The rules in findings.UNJUDGED: a note of theirs is an entry like any other without its step, a warning
+    an entry like any other, and either names the subject the rule's own advice picks."""
 
     def f(self, rid, statement, advice, evidence, severity="info", **rule):
         f = _f(rid, statement, advice, evidence, severity=severity, **rule)
@@ -485,7 +505,8 @@ class Unmeasured(unittest.TestCase):
         return f
 
     def said(self, f, report=None, width=200, found=None):
-        return " ".join(brief.compact(f, report or {}, width, 0, None, found))
+        s = brief.short(f, report or {}, width, None, found)
+        return " ".join(s["statement"] + [x.strip() for x in s["subjects"]])
 
     def test_every_unmeasured_rule_has_a_form_of_its_own(self):
         self.assertEqual(set(findings.UNJUDGED) - set(brief.FORMS), set())
@@ -560,26 +581,23 @@ class Unmeasured(unittest.TestCase):
                    {"count": 9, "bare_except": 0, "hotspots": ["src/b.py"], "files": files}, severity="warning")
         self.assertEqual(brief.short(f, {}, 200)["statement"], ["9 empty catch blocks in 4 source files; first in a top hotspot: src/b.py:3"])
 
-    def test_a_compact_note_is_three_lines_at_most_whatever_the_rule_and_the_width(self):
+    def test_a_note_is_never_cut_in_the_middle_of_its_text(self):
         listing = "; ".join(f"src/package{i}/module{i}.py (a reason given at some length, {i} times over)" for i in range(12))
         for rid in sorted(findings.UNJUDGED):
             for evidence in ({}, {"count": 3}):
                 f = self.f(rid, f"12 things were found by a rule with a threshold of 5 or more: {listing} and 30 more. A closing sentence.", "Do the first thing first.", evidence)
                 for width in (40, 74, 100):
-                    for lead in (0, 30, 60):
-                        lines = brief.compact(f, {}, width, lead)
-                        self.assertLessEqual(len(lines), brief.COMPACT_LINES, rid)
-                        self.assertTrue(all(len(x) <= width for x in lines), (rid, width, lines))
-                        self.assertLessEqual(len(lines[0]), max(width - lead, 0), (rid, width, lead, lines))
-        self.assertEqual(brief.compact(self.f("x", "internationalisation matters.", "Act.", {}), {}, 40, 35), ["", "internationalisation matters"],
-                         "a first word that does not fit beside the title starts under it")
+                    s = brief.short(f, {}, width)
+                    lines = s["statement"] + s["subjects"]
+                    self.assertFalse(any(x.endswith(brief.ELLIPSIS) for x in lines), (rid, width, lines))
+                    self.assertTrue(all(len(x) <= width for x in lines), (rid, width, lines))
 
-    def test_the_findings_print_a_note_compact_and_a_warning_whole(self):
+    def test_a_note_is_its_title_line_and_its_statement_under_it_with_no_step(self):
         note = self.f("unreferenced_files", "3 files are imported by nothing in the tree and are no entry point: discovery/install/install.go, b.ts and c.ts.",
                       "Check discovery/install/install.go before anything else.", {"count": 3, "files": ["discovery/install/install.go", "b.ts", "c.ts"]}, title="Possibly unreferenced files")
         text = _block([note], {}).splitlines()
-        self.assertEqual(text[1:3], ["● Possibly unreferenced files (not measured yet): 3 files imported by nothing in", "  the tree; first discovery/install/install.go"],
-                         "the mark at column 1, the statement on the title's line and wrapped to column 3")
+        self.assertEqual(text[1:3], ["● Possibly unreferenced files (not measured yet)", "  3 files imported by nothing in the tree; first discovery/install/install.go"],
+                         "the title on its own line, as every entry's is, and the statement under it at column 3")
         self.assertNotIn("↳", " ".join(text))
         measured = {k: v for k, v in note.items() if k != "unjudged"}
         text = " ".join(_block([measured], {}).split())
@@ -596,11 +614,11 @@ class Block(unittest.TestCase):
         before = copy.deepcopy(found)
         default, full = _block(found), _block(found, full=True)
         self.assertIn("7 at 5 or more: promql/engine.go 10", default)
-        self.assertIn("\n    7 at 5 or more", default, "subject lines at column 5")
+        self.assertIn("\n    · 7 at 5 or more", default, "subject lines behind their mark at column 5")
         self.assertIn("\n  ↳ Review promql/engine.go", default, "the step at column 3")
         self.assertIn("\n● A title\n  18 files", default, "the mark at column 1, the statement at column 3")
         self.assertNotIn("7 at 5 or more", full)
-        self.assertIn("\n  62 functions are both long and complex:\n    a\n    b\n    c\n    d\n    e\n    and 57 more\n  ↳ Split", full,
+        self.assertIn("\n  62 functions are both long and complex:\n    · a\n    · b\n    · c\n    · d\n    · e\n    · and 57 more\n  ↳ Split", full,
                       "the long shape: the fact, the subjects the statement names one a line, the rest counted, then the step")
         self.assertIn("a long list", full)
         self.assertEqual(found, before)
@@ -619,7 +637,7 @@ class Block(unittest.TestCase):
         self.assertIn("\n    and hand its results", text)
         self.assertLessEqual(sum(1 for x in text.splitlines() if "↳" in x or x.startswith("    ")), 3)
         wide = _block(self.found(), width=200).splitlines()
-        self.assertLessEqual(max(len(x) for x in wide), 100 + 2, "prose stays within 100 characters on a wide terminal")
+        self.assertLessEqual(max(len(x) for x in wide), render.PAGE_WIDTH, "prose stays within the page's width on a wide terminal")
 
     def test_findings_sharing_a_title_show_three_and_count_the_rest(self):
         same = [_f("placeholder_identity", f"\"user{i} <user{i}@localhost>\" made 30 commits (3%).", "Set user.name and user.email.", severity="warning", title="Unconfigured git identity")
