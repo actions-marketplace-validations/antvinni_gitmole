@@ -36,6 +36,9 @@ def _block(found, report=None, full=False, width=80, printed=None):
 
 
 class Shapes(unittest.TestCase):
+    def test_a_stray_closing_bracket_does_not_stop_the_split(self):
+        self.assertEqual(brief._outside_brackets("a), b (c, d), e", ", "), ["a)", "b (c, d)", "e"])
+
     def test_a_wrapped_text_leaves_no_lone_word_on_its_last_line(self):
         """univer's Truck factor ended "had no / author left" at 100 columns; a list ended on "files" or "71%"."""
         text = "2 people would have to leave before 2,427 of the 4,825 source files (50%) had no author left"
@@ -43,6 +46,11 @@ class Shapes(unittest.TestCase):
                          "the last line takes words from the line above until it is WIDOW long, and the number of lines is the greedy wrap's")
         self.assertEqual(brief.wrap("one two three four five six seven eight nine ten", 44), ["one two three four five six", "seven eight nine ten"])
         self.assertEqual(brief.wrap("one two three", 50), ["one two three"], "one line has no last line to fix")
+        said = "83 functions have 100 lines or more. Worst: the anonymous function at packages/ui/src/utils/cell.ts:163 (see Complex functions)"
+        for width in range(40, 120):
+            self.assertFalse([x for x in brief.wrap(said, width) if x.endswith("(see") or x.startswith("functions)")], width)
+        self.assertTrue(any("(see Complex functions)" in brief.wrap(said, w)[-1] and brief.wrap(said, w)[-2].endswith("cell.ts:163") for w in range(40, 120)),
+                        "where the pointer does not fit, it moves down whole")
         self.assertEqual(brief.wrap("a/very/long/path/to/a/file.go → b.go", 31), ["a/very/long/path/to/a/file.go →", "b.go"],
                          "an arrow ends its line; it is not a word to pull down")
         self.assertEqual(brief.wrap("aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii x", 44, 4), ["aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii", "x"],
@@ -618,7 +626,7 @@ class Block(unittest.TestCase):
         self.assertIn("\n  ↳ Review promql/engine.go", default, "the step at column 3")
         self.assertIn("\n● A title\n  18 files", default, "the mark at column 1, the statement at column 3")
         self.assertNotIn("7 at 5 or more", full)
-        self.assertIn("\n  62 functions are both long and complex:\n    · a\n    · b\n    · c\n    · d\n    · e\n    · and 57 more\n  ↳ Split", full,
+        self.assertIn("\n  62 functions are both long and complex:\n    · a\n    · b\n    · c\n    · d\n    · e\n    and 57 more\n  ↳ Split", full,
                       "the long shape: the fact, the subjects the statement names one a line, the rest counted, then the step")
         self.assertIn("a long list", full)
         self.assertEqual(found, before)

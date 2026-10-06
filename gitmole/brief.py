@@ -29,6 +29,7 @@ VULN_GROUPS = 3
 VULN_GROUP_LINES = 3
 HANG = "  "             # marks a subject line as the continuation of the one above (the renderer aligns it under that line's text)
 SUBJECT_INDENT = 4      # a subject line, in from the statement: two of indent and the subject's mark with its space
+SEE = re.compile(r"\(see [^()]{1,40}\)")   # a pointer at a table, "(see Complex functions)": never parted across two lines
 WIDOW = 16              # a wrapped text's last line is at least this long, or two words, when the line above can spare them
 DEPENDENCIES_FILE = "dependencies.json"   # the osv-scanner step's file in the output directory, where the packages not named are
 STEP_LINES = 3          # the step's lines
@@ -57,7 +58,9 @@ def wrap(text: str, width: int, rest: int = None) -> list:
     the end of the line before it, and what a no-break space joins stays together. With `rest`, the lines
     after the first are at most that wide: an entry whose continuation is indented. A last line of one word,
     or shorter than WIDOW, takes words from the line above while that line stays the longer of the two and
-    the last fits ("had no / author left", not "had no author / left"): the number of lines is the same."""
+    the last fits ("had no / author left", not "had no author / left"): the number of lines is the same. A
+    pointer at a table, "(see Complex functions)", is one word: "(see" never ends a line."""
+    text = SEE.sub(lambda m: m.group(0).replace(" ", NBSP), text)
     words = []
     for w in text.split(" "):
         if not w:
@@ -698,7 +701,7 @@ def _outside_brackets(text: str, joint: str) -> list:
     while i < len(text):
         c = text[i]
         depth += c in "([{"
-        depth -= c in ")]}"
+        depth = max(depth - (c in ")]}"), 0)   # a stray closing bracket does not stop every later split
         if depth == 0 and text.startswith(joint, i):
             out.append(text[start:i])
             i += len(joint)
@@ -744,24 +747,23 @@ LONG_SUBJECTS = 5       # the subjects --full prints under a finding, one a line
 
 
 def long(f: dict, width: int = 74) -> dict:
-    """The finding as --full and `--section findings` print it: {"statement": lines, "subjects": lines, "more":
-    lines}, the fact, then the subjects the rule's statement names, one a line (LONG_SUBJECTS at most, the
-    lines one wraps to indented under it, and a last line counting the rest), then what the statement says
-    after its list. Nothing is cut and no version is shortened: this is the rule's own statement, laid out.
+    """The finding as --full and `--section findings` print it: {"statement": lines, "subjects": lines, "counted":
+    lines, "more": lines}, the fact, then the subjects the rule's statement names, one a line (LONG_SUBJECTS at
+    most, the lines one wraps to marked HANG), the line counting the rest, which is no subject and carries no
+    subject's mark, then what the statement says after its list. Nothing is cut and no version is shortened: this is the rule's own statement, laid out.
     prometheus's Vulnerable dependencies was one paragraph of eleven lines with its three packages between
     semicolons. A statement that is no list (no colon in its first sentence, or one subject after it) is
     printed whole."""
     made = parts(f)
     if not made["subjects"]:
-        return {"statement": wrap(made["statement"], width), "subjects": [], "more": []}
+        return {"statement": wrap(made["statement"], width), "subjects": [], "counted": [], "more": []}
     rest = made["rest"] + max(len(made["subjects"]) - LONG_SUBJECTS, 0)
     subjects = []
     for item in made["subjects"][:LONG_SUBJECTS]:
         lines = wrap(item, width - SUBJECT_INDENT)
         subjects += [lines[0]] + [HANG + x for x in lines[1:]]
-    if rest:
-        subjects.append(f"and {rest:,} more")
-    return {"statement": wrap(made["statement"], width), "subjects": subjects, "more": wrap(made["more"], width) if made["more"] else []}
+    counted = [f"and {rest:,} more"] if rest else []
+    return {"statement": wrap(made["statement"], width), "subjects": subjects, "counted": counted, "more": wrap(made["more"], width) if made["more"] else []}
 
 
 def parts(f: dict) -> dict:

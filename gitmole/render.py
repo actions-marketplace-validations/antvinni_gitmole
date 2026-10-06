@@ -2929,7 +2929,7 @@ def _long_entry(g: dict, width: int, style: str) -> list:
     out = [_titled(g, style)]
     for f in g["findings"]:
         made = brief.long(f, width)
-        out += made["statement"] + _subjects(made["subjects"]) + made["more"]
+        out += made["statement"] + _subjects(made["subjects"]) + [f"  {line}" for line in made["counted"]] + made["more"]   # the count under the subjects' column, without their mark
     for advice in g["advice"]:
         out += _step(brief.wrap(advice, width - 2))
     return out

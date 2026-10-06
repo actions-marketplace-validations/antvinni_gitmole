@@ -48,7 +48,7 @@ class Shape(unittest.TestCase):
                     "five (e.py) complexity 16; six (f.py) complexity 15 and 3 more. They are measured by lizard.", "Split one first.")
         text = full(findings=[listed] + found())
         self.assertIn("▲ Brain methods\n  9 functions are both long and complex:\n    · one (a.py) complexity 20\n    · two (b.py) complexity 19\n    · three (c.py) complexity 18\n"
-                      "    · four (d.py) complexity 17\n    · five (e.py) complexity 16\n    · and 4 more\n  They are measured by lizard\n  ↳ Split one first.\n", text,
+                      "    · four (d.py) complexity 17\n    · five (e.py) complexity 16\n    and 4 more\n  They are measured by lizard\n  ↳ Split one first.\n", text,
                       "the fact, five subjects a line each, the rest counted with the ones the statement had counted, what the statement adds, the step")
         block = text[text.index("\nFindings"):text.index("\n◎ ")]
         self.assertEqual(len([line for line in block.splitlines() if line and line[0] in "✖▲●"]), 5, "every finding, each with its own mark")
