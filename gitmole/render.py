@@ -2612,6 +2612,22 @@ def _wrap_styled(text: Text, width, hang: int = 0) -> list:
     return out
 
 
+# One width for the whole page. Every line of the report, the header, the findings, the tables with their rules
+# and captions and the closing lines, is laid out to the terminal's width or PAGE_WIDTH, whichever is smaller.
+# 0.45.0 wrapped the findings at 102 and let everything else run to the terminal's edge, so a 125-column
+# terminal showed two right margins on one page. 110 is the narrowest width at which univer's watch list, the
+# report this layout was judged on, keeps every "look at first" cell whole (at 100 four of its five are cut).
+# Of the 85 default tables of the sixteen 0.45.0 development and large runs and univer, 74 print at their
+# natural width at 110 (71 at 100, 76 at 120); the rest lose middle directories of a path first. A line of
+# prose stays under 110, near the 100 the findings had.
+PAGE_WIDTH = 110
+
+
+def page_width(console: Console) -> int:
+    """The width the report is laid out to on `console`: its own, at most PAGE_WIDTH."""
+    return min(console.width, PAGE_WIDTH)
+
+
 def show(console: Console, block) -> None:
     """Print a block: soft-wrapped, so a line longer than the terminal (a path that cannot be broken) is left
     whole for the terminal to wrap, where a copy still pastes as one path."""
@@ -2852,39 +2868,49 @@ def _unmeasured(g: dict) -> bool:
 
 
 def _titled(g: dict, style: str) -> Text:
-    """An entry's mark and title, in its severity's colour (a note's in none), and the dim tag after the title
-    when its rule is not measured yet: the colour ends with the title."""
-    return Text.assemble((f"{SEVERITY_MARK[g['severity']]} {g['title']}", style), (f" {brief.UNMEASURED_TAG}", DIM) if _unmeasured(g) else "")
+    """An entry's title line: its mark in its severity's colour (a note's in none), the title bold, in the
+    severity's colour too for a critical or a warning, and the dim tag after it when its rule is not measured
+    yet. Every title is bold, so a note's stands out from the text under it as a warning's does; without
+    colour the mark says the severity and the title's own line and the blank line before it set it apart."""
+    return Text.assemble((SEVERITY_MARK[g["severity"]], style), " ", (g["title"], style if BOLD in style.split() else f"{BOLD} {style}".strip()),
+                         (f" {brief.UNMEASURED_TAG}", DIM) if _unmeasured(g) else "")
 
 
 def _step(lines: list) -> list:
-    """A step's lines as printed: led by its mark, the lines it wraps to two further in."""
+    """A step's lines as printed: led by its mark, the lines it wraps to under the text after the mark."""
     return [f"{STEP_MARK} {lines[0]}"] + [f"  {line}" for line in lines[1:]] if lines else []
 
 
-def _short_entry(g: dict, report: dict, width: int, printed: dict, style: str, found: list = None) -> list:
-    """One entry of the default report's Findings as its lines, the mark and title first: then each finding's short
-    form (brief.short), the statement, its subject lines indented two, and the step under its mark with its
-    continuation indented two. The lines come wrapped, so a path or a version is never split. An entry
-    holding several findings of one title shows brief.SUBJECT_LINES of them and counts the rest.
+SUBJECT_MARK = "·"   # in front of a finding's subject line, two in from its statement
 
-    A note from a rule not measured yet takes the compact shape instead: title, tag, ': ' and the statement,
-    brief.COMPACT_LINES lines at most and no step (brief.compact). prometheus's report folded five such
-    findings, one of them a warning, into a closing line, so its title counted a warning no ▲ stood for; now
-    every finding owns one mark. A warning from such a rule is an entry like any other, with the tag after
-    its title. Only the title carries the severity's colour: the statement, the subjects and the step are in
-    the terminal's own foreground, where prometheus's were dim yellow and dim italic yellow."""
-    body = _titled(g, style)
-    if _unmeasured(g) and g["severity"] == "info" and len(g["findings"]) == 1:
-        lead = len(g["title"]) + 1 + len(brief.UNMEASURED_TAG) + 2
-        lines = brief.compact(g["findings"][0], report, width, lead, printed, found)
-        body.append(":" + (f" {lines[0]}" if lines[0] else ""))
-        return [body] + lines[1:]
+
+def _subjects(lines: list) -> list:
+    """A finding's subject lines as printed: each subject behind SUBJECT_MARK two columns in from the
+    statement, and the lines a subject wraps to (brief.HANG) under its text, so a subject's second line is
+    not taken for a subject of its own and a step's second line, which sits under the step's text two
+    columns in, is not taken for a subject. 0.45.0 put both at the same column."""
+    hang = len(brief.HANG)
+    return [Text.assemble(" " * (2 + hang), line[hang:]) if line.startswith(brief.HANG)
+            else Text.assemble("  ", (SUBJECT_MARK, DIM), " ", line) for line in lines]
+
+
+def _short_entry(g: dict, report: dict, width: int, printed: dict, style: str, found: list = None) -> list:
+    """One entry of the default report's Findings as its lines, the title line first: then each finding's short
+    form (brief.short), the statement, its subject lines behind their mark (_subjects), and the step under its
+    mark with its continuation under the step's text. The lines come wrapped, so a path or a version is never
+    split. An entry holding several findings of one title shows brief.SUBJECT_LINES of them and counts the rest.
+
+    A note from a rule not measured yet has the same shape and no step: the rule's worth is not known, and its
+    statement names the subject the advice would. 0.45.0 printed it on its title's line after a colon, so two
+    shapes of entry stood in one list. A warning from such a rule has its step, like any other. Only the
+    title carries the severity's colour: the statement, the subjects and the step are in the terminal's own
+    foreground, where prometheus's were dim yellow and dim italic yellow."""
+    quiet = _unmeasured(g) and g["severity"] == "info"
     shorts = [brief.short(f, report, width, printed, found) for f in g["findings"]]
-    out, steps = [body], []
+    out, steps = [_titled(g, style)], []
     for s in shorts[:brief.SUBJECT_LINES]:
-        out += s["statement"] + [f"  {line}" for line in s["subjects"]]
-        if s["step"] and s["step"] not in steps:
+        out += s["statement"] + _subjects(s["subjects"])
+        if s["step"] and s["step"] not in steps and not quiet:
             steps.append(s["step"])
     if len(shorts) > brief.SUBJECT_LINES:
         out.append(f"and {len(shorts) - brief.SUBJECT_LINES:,} more")
@@ -2895,21 +2921,20 @@ def _short_entry(g: dict, report: dict, width: int, printed: dict, style: str, f
 
 def _long_entry(g: dict, width: int, style: str) -> list:
     """One entry of --full's Findings as its lines: the title, then each finding in the long shape (brief.long):
-    the fact, the subjects its statement names one a line and two further in, what the statement says after
-    them, and every step. Wrapped at spaces only, so a path, a package or a version is never broken (the box
-    put the last letter of prometheus's web/ui/mantine-ui/src/pages/service-discovery/ServiceDiscoveryPoolsList.tsx
+    the fact, the subjects its statement names one a line behind their mark (_subjects), what the statement
+    says after them, and every step. Wrapped at spaces only, so a path, a package or a version is never broken
+    (the box put the last letter of prometheus's web/ui/mantine-ui/src/pages/service-discovery/ServiceDiscoveryPoolsList.tsx
     on the next line); one longer than the line has a line to itself. It was each statement as one paragraph,
     its subjects between semicolons."""
     out = [_titled(g, style)]
     for f in g["findings"]:
         made = brief.long(f, width)
-        out += made["statement"] + [f"  {line}" for line in made["subjects"]] + made["more"]
+        out += made["statement"] + _subjects(made["subjects"]) + [f"  {line}" for line in made["counted"]] + made["more"]   # the count under the subjects' column, without their mark
     for advice in g["advice"]:
         out += _step(brief.wrap(advice, width - 2))
     return out
 
 
-PROSE_WIDTH = 100   # a finding's lines are no longer than this on a terminal wider than it
 ENTRY_INDENT = 2    # a finding's mark and the space after it: what its title, statement and step start behind
 
 
@@ -2923,18 +2948,23 @@ def findings_block(findings: list, report: dict = None, full: bool = True, width
     two borders took four columns from every line, so prometheus's Bug magnets named six of its seven files
     and counted the seventh."""
     absent = not_computed_line(report) if report else None
-    inner = min((width or PROSE_WIDTH + ENTRY_INDENT) - ENTRY_INDENT, PROSE_WIDTH)   # less the mark and its gap
+    width = min(width or PAGE_WIDTH, PAGE_WIDTH)   # the page's width (page_width), whoever calls
+    inner = width - ENTRY_INDENT   # less the mark and its gap
     if not findings and not absent:   # a scan that came back clean is a row of the Supply chain section, not a line here
         return _lines([_title("Findings"), " " * ENTRY_INDENT + NOTHING_FLAGGED])
     lines = _wrap_styled(_title(tally_title(findings, gloss=True, width=width)), width, ENTRY_INDENT)
-    for g in textfmt.group_findings(findings):
+    for n, g in enumerate(textfmt.group_findings(findings)):
         style = SEVERITY_STYLE[g["severity"]]
+        if n:
+            lines.append("")   # a blank line between two entries: 0.45.0's eighteen on univer ran as one block
         entry = _long_entry(g, inner, style) if full else _short_entry(g, report or {}, inner, printed, style, findings)
         lines += _wrap_styled(entry[0], inner + ENTRY_INDENT, ENTRY_INDENT)   # the mark at column 1; a title longer than the line wraps to column 3
         lines += [Text.assemble(" " * ENTRY_INDENT, line) for line in entry[1:]]
     if absent and not findings:
         lines.append(" " * ENTRY_INDENT + NOTHING_FLAGGED)
     if absent:   # last: what was found, then what was never measured, so its silence is not a pass
+        if findings:
+            lines.append("")
         said = brief.wrap(absent, inner)
         lines += [Text(f"· {said[0]}", style=DIM)] + [Text(" " * ENTRY_INDENT + line, style=DIM) for line in said[1:]]
     return _lines(lines)
@@ -3235,7 +3265,7 @@ def print_section(console: Console, sec: dict) -> None:
     """Blank line, then the section's title and table (or note), fitted to the console's width."""
     carry(console)
     console.print(Text(""))
-    show(console, section_block(sec, console.width))
+    show(console, section_block(sec, page_width(console)))
 
 
 def _dim(console: Console, line: str) -> None:
@@ -3251,7 +3281,7 @@ def report(report: dict, findings: list, console: Console, full: bool = False, r
     section opens its own group of sections (SUPPLY_GROUP) and is no longer last; and the closing lines say
     what produced the report and what else the output directory holds."""
     carry(console)
-    secs = [s for s in sections(report, full=full, width=console.width) if not _said_by_finding(s, findings)]
+    secs = [s for s in sections(report, full=full, width=page_width(console)) if not _said_by_finding(s, findings)]
     by_id = {s["id"]: s for s in secs}
     grouped = [s for s in secs if s["id"] in SUPPLY_GROUP] if full else []   # --full: the grid, then the sections of its group
     contents = None
@@ -3265,15 +3295,15 @@ def report(report: dict, findings: list, console: Console, full: bool = False, r
                 contents.append("Change risk")
         if not grouped:
             contents.append(SUPPLY_TITLE)
-    show(console, header(report, findings, full=full, width=console.width, contents=contents))
+    show(console, header(report, findings, full=full, width=page_width(console), contents=contents))
     console.print(Text(""))
-    show(console, findings_block(findings, report, full=full, width=console.width, printed=by_id))   # a short finding may point at its table below
+    show(console, findings_block(findings, report, full=full, width=page_width(console), printed=by_id))   # a short finding may point at its table below
     if compare is not None:
         print_section(console, compare_section(compare))
 
     def supply():
         console.print(Text(""))
-        show(console, supply_chain_block(report, findings, full=full, width=console.width))
+        show(console, supply_chain_block(report, findings, full=full, width=page_width(console)))
     # One section under another at every width: small tables used to sit side by side from 100 columns, which
     # changed the order of the lines with the terminal and put two tables on every copied line. A wider terminal
     # un-elides paths and re-wraps prose, and changes nothing else.
@@ -3287,11 +3317,11 @@ def report(report: dict, findings: list, console: Console, full: bool = False, r
         supply()
     console.print(Text(""))
     if full:
-        for line in full_closing_lines(report, console.width):
+        for line in full_closing_lines(report, page_width(console)):
             _dim(console, line)
         _dim(console, results_line(report))
         return
-    for line in closing_lines(report, console.width):
+    for line in closing_lines(report, page_width(console)):
         _dim(console, line)
     _dim(console, report.get("out_dir") or "")   # the results path, alone on the last line
 
@@ -3300,10 +3330,10 @@ def excerpt(report: dict, findings: list, console: Console, full: bool = False) 
     """The report's opening on its own: the header, the Findings title, whose tally counts the findings, and
     the watch list. What the README's text block shows; the findings themselves are in the full report."""
     carry(console)
-    show(console, header(report, findings, width=console.width))
+    show(console, header(report, findings, width=page_width(console)))
     console.print(Text(""))
     show(console, _title(tally_title(list(findings))))
-    print_section(console, next(sec for sec in sections(report, full=full, width=console.width) if sec["id"] == "watch"))
+    print_section(console, next(sec for sec in sections(report, full=full, width=page_width(console)) if sec["id"] == "watch"))
 
 
 # --- markdown / json -------------------------------------------------------

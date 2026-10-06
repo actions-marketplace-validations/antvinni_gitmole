@@ -159,7 +159,7 @@ class Rendered(unittest.TestCase):
                               "40% of commits and 50% of fixes change only unscored files"])
             text = _text(report)
             self.assertRegex(text, r"(?m)^  files +1 with code · 1 of 5 files scored \(source: not test, example, generated or vendored\)$")
-            self.assertRegex(text, r"(?m)^  code +100 lines · Shell · 85% of tracked lines are documentation, not ranked · --file-types all\n +includes them$",
+            self.assertRegex(text, r"(?m)^  code +100 lines · Shell · 85% of tracked lines are documentation, not ranked ·\n +--file-types all includes them$",
                              "the flag is not parted from its argument")
             self.assertRegex(text, r"(?m)^  commits +(\d+% are fixes · )?40% of commits and 50% of fixes change only unscored files$", "each fact on the row its label describes")
             full = _text(report, full=True)

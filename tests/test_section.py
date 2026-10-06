@@ -231,8 +231,9 @@ class Layout(unittest.TestCase):
                 for i, line in enumerate(lines):
                     if set(line.strip()) == {"─"}:   # a table: its rule is as wide as its widest row
                         table = [lines[i - 1]] + [row for row in lines[i + 1:] if row.startswith("  ") and not row.startswith("    ")]
-                        sec = render.whole_section(report, section.NAMES[name], width)
-                        drawn = render.table_lines(render.fit(sec, width))
+                        page = min(width, render.PAGE_WIDTH)   # the page is the terminal's width up to PAGE_WIDTH
+                        sec = render.whole_section(report, section.NAMES[name], page)
+                        drawn = render.table_lines(render.fit(sec, page))
                         self.assertEqual(len(line), max(len(x.plain) for x in [drawn["head"]] + drawn["rows"]), (name, width))
                         self.assertLessEqual(len(line), width, (name, width))
                         self.assertTrue(table)

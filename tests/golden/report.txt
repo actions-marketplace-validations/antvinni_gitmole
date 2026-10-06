@@ -10,9 +10,11 @@ Findings · 2 notes ●
 ● Files that always change together
   1 pair changes together 80% of the time or more: main.py and util.py in app/, 83%
   ↳ Look for a shared layout or a hidden dependency between the two.
+
 ● Repository policy files
   No licence file at the root; no security policy (SECURITY.md)
   ↳ Add a LICENSE; without one nobody may reuse the code.
+
 · truck factor not computed: 3 source files, needs 20
 
 ◎ Watch list · all 2, ranked by changes × lines of code

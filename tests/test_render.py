@@ -2,6 +2,7 @@ import json
 import io
 import re
 import unittest
+from unittest import mock
 
 from rich.console import Console
 
@@ -66,6 +67,11 @@ def _headings(text: str) -> list:
     """The titles of the sections a rendered report prints, in order: the lines that start with a section's
     pictogram. The default report's closing lines name --full's sections in a sentence, which is not a heading."""
     return [render._base_title(line[2:]).split(":")[0] for line in text.splitlines() if line[:1] in set(render.SYMBOLS.values()) | {"•"} and line[1:2] == " "]
+
+
+def _flat(text: str) -> str:
+    """Rendered text as running text: what a caption or a note says, wherever the page's width wrapped it."""
+    return " ".join(text.split())
 
 
 def _supply(text: str) -> str:
@@ -265,7 +271,8 @@ class Report(unittest.TestCase):
         self.assertIn("  signing       7% of commits signed by their authors (signatures not verified)", text, "one line: the share, and that nothing was verified")
         whole = "signing 7% of commits signed by their authors (ssh 6%, gpg 1%), 14% of the last year's; 39% signed by the forge on merge (signatures not verified)"
         self.assertIn(whole, _supply(rendered(r, [], width=80, full=True)), "--full says the rest")
-        self.assertIn(whole, _supply(rendered(r, [], width=200)), "and so does a terminal wide enough for it on one line")
+        self.assertEqual(_supply(rendered(r, [], width=200)), _supply(rendered(r, [], width=render.PAGE_WIDTH)),
+                         "a terminal wider than the page prints the page: the row keeps to its one line")
         r["signing"] = {"commits": 5, "signed": 0}
         self.assertIn("signing no commits signed", _supply(rendered(r, []) + "\n"))
         r["signing"] = {}
@@ -405,7 +412,8 @@ class Report(unittest.TestCase):
         r = sample_report()
         r["revisions"] = [{"entity": "static/apps-metadata.json", "n-revs": 128}, {"entity": "static/index.html", "n-revs": 51},
                           {"entity": "gone.py", "n-revs": 300}]
-        text = rendered(r, [], width=140, full=True)   # wide enough for the eleven columns with their paths whole
+        with mock.patch.object(render, "PAGE_WIDTH", 140):
+            text = rendered(r, [], width=140, full=True)   # a page wide enough for the eleven columns with their paths whole
         text = text[text.index("◆ Hotspots"):]
         lines = [l.strip() for l in text.splitlines() if l.strip().startswith(("static/", "gone.py"))]
         # index.html: 51 x 4000 = 204,000 beats metadata.json: 128 x 800 = 102,400; deleted gone.py has no score and no row
@@ -974,7 +982,7 @@ class Report(unittest.TestCase):
                                "start": 20179, "end": 26572, "suspect": "", "lizard_span": {"end": 20446, "nloc": 222}})
         fn = _section_text(rendered(r, [], width=200), "Complex functions")
         self.assertRegex(fn, r"executeRun\s+server/heartbeat.ts\s+55\+\s+6,394")
-        self.assertIn("+ = lizard ended the function early (1): its lines are the structure step's, its complexity what lizard counted before it stopped", fn)
+        self.assertIn("+ = lizard ended the function early (1): its lines are the structure step's, its complexity what lizard counted before it stopped", _flat(fn))
 
     def test_default_complex_functions_hide_vendored_code_and_say_so(self):
         r = sample_report()
@@ -1040,7 +1048,7 @@ class Report(unittest.TestCase):
         r["meta"]["merges"] = 2
         r["activity"]["squash_subjects"] = 300
         regime = "83% of subjects end in (#NNNN) and 2 of 363 commits are merges: squash-merged, so the pairs describe pull requests, not edits"
-        self.assertIn(regime, _section_text(rendered(r, [], width=200, full=True), "Change coupling"))
+        self.assertIn(regime, _flat(_section_text(rendered(r, [], width=200, full=True), "Change coupling")))
         self.assertIn(regime, render.markdown(r, []))
         self.assertNotIn("squash", _section_text(rendered(r, [], width=200), "Change coupling"), "how the table was made is --full's; the default caption says what is hidden and what a row is")
         r["activity"]["squash_subjects"] = 3
@@ -1227,7 +1235,7 @@ class Report(unittest.TestCase):
         r = sample_report()
         r["functions"] = [{"file": "tests/test_a.py", "function": "test_thing", "ccn": 40, "nloc": 50, "params": 0, "start": 1, "end": 50}]
         fn = _section_text(rendered(r, [], width=200), "Complex functions")
-        self.assertIn("nothing at complexity 10 or more in source files (1 function measured) · 1 test function hidden", fn)
+        self.assertIn("nothing at complexity 10 or more in source files (1 function measured) · 1 test function hidden", _flat(fn))
 
     def test_complex_functions_with_nothing_to_show_keep_their_plain_note(self):
         r = sample_report()
@@ -1377,7 +1385,7 @@ class ComplexFunctions(unittest.TestCase):
             self.assertEqual(sec["caption"], f"partial: {reason} · {render.COMPLEXITY_DEFINITION}", status)
         r["meta"]["functions"] = {"status": "timeout"}
         r["functions"] = [{"file": "a.py", "function": "simple", "ccn": 2, "nloc": 5, "params": 0, "start": 1, "end": 5}]
-        self.assertIn("Complex functions: nothing at complexity 10 or more (1 function measured; partial: function metrics timed out)", rendered(r, []))
+        self.assertIn("Complex functions: nothing at complexity 10 or more (1 function measured; partial: function metrics timed out)", _flat(rendered(r, [])))
 
     def test_a_partial_run_keeps_the_count_of_the_rest(self):
         r = sample_report()
@@ -2724,7 +2732,8 @@ class SummaryLine(unittest.TestCase):
         self.assertEqual(sum(line.startswith(("✖ ", "▲ ", "● ")) for line in lines), len(found))
         at = lines.index("▲ Deep nesting (not measured yet)")
         self.assertEqual(lines[at + 1:at + 3], ["  deep", "  ↳ Flatten it."], "a warning is an entry like any other, with its step, both at column 3")
-        self.assertIn("● Debt in hotspots (not measured yet): debt in two of them", lines, "a note is title, tag and statement, and no step")
+        at = lines.index("● Debt in hotspots (not measured yet)")
+        self.assertEqual(lines[at + 1:at + 2], ["  debt in two of them"], "a note is the title and tag on the mark's line, the statement under it, and no step")
         self.assertNotIn("Ticket it.", text)
         self.assertIn("Findings · 1 critical ✖ · 2 warnings ▲ · 1 note ● · 2 by rules not measured for precision yet", text.splitlines()[0])
         full = self._text(render.findings_block(found, {}, full=True))

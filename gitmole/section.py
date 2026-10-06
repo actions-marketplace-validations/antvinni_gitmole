@@ -114,10 +114,10 @@ def show(report: dict, found: list, console, names: list) -> None:
         if n:
             console.print(Text(""))
         if NAMES[name] == FINDINGS:
-            render.show(console, render.findings_block(found, report, full=True, width=console.width))
+            render.show(console, render.findings_block(found, report, full=True, width=render.page_width(console)))
             continue
-        sec = _built(report, name, console.width)
-        render.show(console, Text(_nothing(name), style=render.DIM) if sec is None else render.section_block(sec, console.width))
+        sec = _built(report, name, render.page_width(console))
+        render.show(console, Text(_nothing(name), style=render.DIM) if sec is None else render.section_block(sec, render.page_width(console)))
     left = _unfinished(report)
     if left:
         render.show(console, Text(left, style=render.DIM))
